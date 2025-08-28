@@ -2,12 +2,17 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:flutter/services.dart' show Clipboard, ClipboardData, HapticFeedback;
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:basta_fda/services/fda_checker.dart';
 import 'package:basta_fda/screens/scan_result_screen.dart';
 import 'package:basta_fda/screens/not_found_screen.dart';
+import 'package:basta_fda/screens/history_screen.dart';
+import 'package:basta_fda/screens/settings_screen.dart';
+import 'package:basta_fda/screens/login_screen.dart';
+import 'package:basta_fda/services/history_service.dart';
+import 'package:basta_fda/services/settings_service.dart';
 
 class ScannerScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
@@ -30,15 +35,40 @@ class _ScannerScreenState extends State<ScannerScreen> {
   String _extractedText = "";
   List<String> _suggestions = [];
   Size? _imageSize;
-  final TextRecognizer _textRecognizer = TextRecognizer();
+  final TextRecognizer _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
   Timer? _debounce;
   bool _isCapturing = false;
   bool _showExtractedExpanded = false;
+  String? _lastRawText; // keep last raw OCR text for Reg No extraction
+  // Tap-to-focus + pinch-to-zoom
+  Offset? _lastFocusTap;
+  DateTime? _lastFocusAt;
+  double _minZoom = 1.0;
+  double _maxZoom = 1.0;
+  double _currentZoom = 1.0;
+  double _baseZoomForScale = 1.0;
 
   @override
   void initState() {
     super.initState();
     _initCamera();
+    // Load user settings
+    SettingsService.instance.load().then((_) {
+      if (!mounted) return;
+      setState(() {
+        _liveMode = SettingsService.instance.liveOcrDefault;
+      });
+      // Auto-start/stop live OCR stream based on setting
+      if (_liveMode) {
+        _startStream();
+      } else {
+        _stopStream();
+      }
+    });
+    // Ensure FDA data is loading; refresh UI when ready
+    widget.fdaChecker.loadCSV().then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _initCamera() async {
@@ -49,6 +79,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
     await _controller!.initialize();
+    try {
+      _minZoom = await _controller!.getMinZoomLevel();
+      _maxZoom = await _controller!.getMaxZoomLevel();
+      _currentZoom = _minZoom;
+      await _controller!.setZoomLevel(_currentZoom);
+      await _controller!.setFocusMode(FocusMode.auto);
+    } catch (_) {}
     setState(() => _isInitialized = true);
     // Do not start stream by default to avoid ImageReader buffer pressure.
   }
@@ -114,6 +151,42 @@ class _ScannerScreenState extends State<ScannerScreen> {
     }
   }
 
+  // Prefer text within the reticle-like ROI; fallback to all text if too short
+  String _composeTextFromResult(RecognizedText result) {
+    if (result.blocks.isEmpty) return cleanText(result.text);
+    double minX = double.infinity, minY = double.infinity, maxX = 0, maxY = 0;
+    for (final b in result.blocks) {
+      final r = b.boundingBox;
+      if (r == null) continue;
+      if (r.left < minX) minX = r.left;
+      if (r.top < minY) minY = r.top;
+      if (r.right > maxX) maxX = r.right;
+      if (r.bottom > maxY) maxY = r.bottom;
+    }
+    final w = (maxX - minX).abs();
+    final h = (maxY - minY).abs();
+    if (w <= 0 || h <= 0) return cleanText(result.text);
+
+    // Main ROI centered; slightly shorter to reduce noise
+    final roi = Rect.fromLTWH(minX + w * 0.2, minY + h * 0.33, w * 0.6, h * 0.30);
+    // Footer strip to catch bottom lines (e.g., Reg. No.)
+    final footer = Rect.fromLTWH(minX + w * 0.15, minY + h * 0.63, w * 0.70, h * 0.22);
+    final buffer = StringBuffer();
+    for (final block in result.blocks) {
+      final box = block.boundingBox;
+      if (box == null) continue;
+      if (roi.overlaps(box) || footer.overlaps(box)) {
+        buffer.writeln(block.text);
+      }
+    }
+    final focused = cleanText(buffer.toString());
+    // Fallback to full text if ROI extraction is too short
+    if (focused.split(' ').where((t) => t.isNotEmpty).length >= 2) {
+      return focused;
+    }
+    return cleanText(result.text);
+  }
+
   // Reliable still-shot scan used for Confirm action
   Future<String?> _scanFromPhoto() async {
     if (!mounted || _controller == null || !_controller!.value.isInitialized) return null;
@@ -122,11 +195,21 @@ class _ScannerScreenState extends State<ScannerScreen> {
       // Stop the stream before capture to avoid conflicts
       await _stopStream();
 
+      // Autofocus pulse at center, small settle delay for sharpness
+      try {
+        final center = const Offset(0.5, 0.5);
+        await _controller!.setFocusMode(FocusMode.auto);
+        await _controller!.setFocusPoint(center);
+        await _controller!.setExposurePoint(center);
+        await Future.delayed(const Duration(milliseconds: 250));
+      } catch (_) {}
+
       final XFile file = await _controller!.takePicture();
       final inputImage = InputImage.fromFilePath(file.path);
       final RecognizedText result = await _textRecognizer.processImage(inputImage);
       final rawText = result.text;
-      final scannedText = cleanText(rawText);
+      _lastRawText = rawText;
+      final scannedText = _composeTextFromResult(result);
 
       debugPrint('----- OCR RAW TEXT START -----');
       debugPrint(rawText);
@@ -174,13 +257,21 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }
 
   Future<void> _matchScannedText() async {
-    // Review step before searching so users can see/edit the text first
+    // Honor setting: skip review if disabled
+    final wantsReview = SettingsService.instance.reviewBeforeSearch;
+    if (!wantsReview) {
+      final text = await _scanFromPhoto();
+      if (text != null && text.isNotEmpty) {
+        await _executeSearch(text);
+      }
+      return;
+    }
     await _reviewAndSearch();
   }
 
-  Future<void> _reviewAndSearch() async {
-    // Capture a fresh still for reliable OCR
-    final text = await _scanFromPhoto();
+  Future<void> _reviewAndSearch({String? preset, bool capturePhoto = true}) async {
+    // Start with preset or capture a fresh still for reliable OCR
+    final text = capturePhoto ? await _scanFromPhoto() : preset;
     if (!mounted) return;
     String working = text ?? _extractedText;
 
@@ -193,63 +284,90 @@ class _ScannerScreenState extends State<ScannerScreen> {
       ),
       builder: (ctx) {
         final controller = TextEditingController(text: working);
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
-            left: 16,
-            right: 16,
-            top: 16,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+        // Detect Reg. No. candidates from raw or current text
+        final rawForReg = _lastRawText ?? working;
+        final regCandidates = widget.fdaChecker.regCandidates(rawForReg);
+        final padding = EdgeInsets.only(
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
+          left: 16,
+          right: 16,
+          top: 16,
+        );
+        return SafeArea(
+          child: Container(
+            width: double.infinity,
+            padding: padding,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Review Extracted Text', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.copy_rounded),
-                    tooltip: 'Copy',
-                    onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: controller.text));
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
-                      }
-                    },
-                  )
+                  Row(
+                    children: [
+                      const Text('Review Extracted Text', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.copy_rounded),
+                        tooltip: 'Copy',
+                        onPressed: () async {
+                          await Clipboard.setData(ClipboardData(text: controller.text));
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                          }
+                        },
+                      )
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: controller,
+                    maxLines: 4,
+                    minLines: 2,
+                    decoration: InputDecoration(
+                      hintText: 'Edit or confirm the extracted text',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onChanged: (v) => working = v,
+                  ),
+                  const SizedBox(height: 12),
+                  if (regCandidates.isNotEmpty) ...[
+                    Text('Detected Reg. No.', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).hintColor)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: -6,
+                      children: regCandidates.take(3).map((code) {
+                        return ActionChip(
+                          label: Text(code),
+                          onPressed: () {
+                            controller.text = code;
+                            working = code;
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      const Spacer(),
+                      ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          _executeSearch(working);
+                        },
+                        icon: const Icon(Icons.search_rounded),
+                        label: const Text('Use & Search'),
+                      ),
+                    ],
+                  ),
                 ],
               ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: controller,
-                maxLines: 4,
-                minLines: 2,
-                decoration: InputDecoration(
-                  hintText: 'Edit or confirm the extracted text',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                onChanged: (v) => working = v,
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    child: const Text('Cancel'),
-                  ),
-                  const Spacer(),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.of(ctx).pop();
-                      _executeSearch(working);
-                    },
-                    icon: const Icon(Icons.search_rounded),
-                    label: const Text('Use & Search'),
-                  ),
-                ],
-              ),
-            ],
+            ),
           ),
         );
       },
@@ -257,9 +375,16 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }
 
   Future<void> _executeSearch(String text) async {
-    final matchedProduct = widget.fdaChecker.findProductDetails(text);
+    // Prefer direct Reg. No. match using raw OCR (more reliable for patterns)
+    final raw = _lastRawText ?? text;
+    final byReg = widget.fdaChecker.findByRegNo(raw);
+    // If a reg-like code is present but not found, avoid heuristic false positives
+    final regLike = RegExp(r"\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b").hasMatch(raw) ||
+        RegExp(r"\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b", caseSensitive: false).hasMatch(raw);
+    final matchedProduct = byReg ?? (regLike ? null : widget.fdaChecker.findProductDetails(text));
     if (!mounted) return;
     if (matchedProduct != null) {
+      await HistoryService.instance.addEntry(scannedText: text, productInfo: matchedProduct, status: 'VERIFIED');
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -270,10 +395,21 @@ class _ScannerScreenState extends State<ScannerScreen> {
         ),
       );
     } else {
-      Navigator.push(
+      await HistoryService.instance.addEntry(scannedText: raw, productInfo: null, status: 'NOT FOUND');
+      final returned = await Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => NotFoundScreen(scannedText: text)),
+        MaterialPageRoute(builder: (context) => NotFoundScreen(scannedText: raw, fdaChecker: widget.fdaChecker)),
       );
+      if (!mounted) return;
+      if (returned is String && returned.isNotEmpty) {
+        setState(() => _extractedText = returned);
+        final wantsReview = SettingsService.instance.reviewBeforeSearch;
+        if (wantsReview) {
+          await _reviewAndSearch(preset: returned, capturePhoto: false);
+        } else {
+          await _executeSearch(returned);
+        }
+      }
     }
   }
 
@@ -297,13 +433,88 @@ class _ScannerScreenState extends State<ScannerScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Scan Product')),
+appBar: AppBar(
+        title: const Text('Scan Product'),
+        actions: [
+          IconButton(
+            tooltip: 'Logout',
+            icon: const Icon(Icons.logout_rounded),
+            onPressed: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text('End session?'),
+                  content: const Text('You will return to the login screen.'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                    ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('OK')),
+                  ],
+                ),
+              );
+              if (ok == true) {
+                final s = SettingsService.instance;
+                await s.load();
+                s.isLoggedIn = false;
+                s.guestMode = false;
+                await s.save();
+                if (!mounted) return;
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => LoginScreen(cameras: widget.cameras, fdaChecker: widget.fdaChecker)),
+                  (route) => false,
+                );
+              }
+            },
+          ),
+          IconButton(
+            tooltip: 'History',
+            icon: const Icon(Icons.history_rounded),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen())),
+          ),
+          IconButton(
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings_rounded),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(fdaChecker: widget.fdaChecker))),
+          ),
+        ],
+      ),
       body: Stack(
         children: [
+          Positioned.fill(child: CameraPreview(_controller!)),
+
+          // Gesture layer for tap-to-focus and pinch-to-zoom
           Positioned.fill(
-            child: AspectRatio(
-              aspectRatio: _controller!.value.aspectRatio,
-              child: CameraPreview(_controller!),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: (details) async {
+                if (_controller == null || !_controller!.value.isInitialized) return;
+                final size = MediaQuery.of(context).size;
+                final dx = (details.localPosition.dx / size.width).clamp(0.0, 1.0);
+                final dy = (details.localPosition.dy / size.height).clamp(0.0, 1.0);
+                try {
+                  await _controller!.setFocusMode(FocusMode.auto);
+                  await _controller!.setFocusPoint(Offset(dx, dy));
+                  await _controller!.setExposurePoint(Offset(dx, dy));
+                  HapticFeedback.selectionClick();
+                  setState(() {
+                    _lastFocusTap = details.localPosition;
+                    _lastFocusAt = DateTime.now();
+                  });
+                } catch (_) {}
+              },
+              onScaleStart: (details) {
+                _baseZoomForScale = _currentZoom;
+              },
+              onScaleUpdate: (details) async {
+                if (_controller == null) return;
+                final desired = (_baseZoomForScale * details.scale).clamp(_minZoom, _maxZoom);
+                if ((desired - _currentZoom).abs() > 0.01) {
+                  _currentZoom = desired;
+                  try {
+                    await _controller!.setZoomLevel(_currentZoom);
+                  } catch (_) {}
+                  setState(() {});
+                }
+              },
             ),
           ),
 
@@ -315,53 +526,73 @@ class _ScannerScreenState extends State<ScannerScreen> {
             ),
           ),
 
+          // Small banner to indicate FDA DB loading state
+          if (!widget.fdaChecker.isLoaded)
+            Positioned(
+              top: 12,
+              left: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.45),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: const [
+                    SizedBox(
+                      height: 14,
+                      width: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    ),
+                    SizedBox(width: 8),
+                    Text('Loading FDA data…', style: TextStyle(color: Colors.white)),
+                  ],
+                ),
+              ),
+            ),
+
           Positioned(
             top: 12,
             right: 12,
-            child: Column(
-              children: [
-                _roundIconButton(
-                  icon: _paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-                  tooltip: _paused ? 'Resume' : 'Pause',
-                  onTap: () => setState(() => _paused = !_paused),
-                ),
-                const SizedBox(height: 10),
-                _roundIconButton(
-                  icon: _torchOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
-                  tooltip: _torchOn ? 'Torch On' : 'Torch Off',
-                  onTap: () async {
-                    try {
-                      _torchOn = !_torchOn;
-                      await _controller!.setFlashMode(_torchOn ? FlashMode.torch : FlashMode.off);
-                      setState(() {});
-                    } catch (_) {}
-                  },
-                ),
-                const SizedBox(height: 10),
-                _roundIconButton(
-                  icon: _liveMode ? Icons.visibility_rounded : Icons.visibility_off_rounded,
-                  tooltip: _liveMode ? 'Live OCR On' : 'Live OCR Off',
-                  onTap: () async {
-                    setState(() => _liveMode = !_liveMode);
-                    if (_liveMode) {
-                      await _startStream();
-                    } else {
-                      await _stopStream();
-                    }
-                  },
-                ),
-              ],
+            child: _roundIconButton(
+              icon: _torchOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
+              tooltip: _torchOn ? 'Torch On' : 'Torch Off',
+              onTap: () async {
+                try {
+                  _torchOn = !_torchOn;
+                  await _controller!.setFlashMode(_torchOn ? FlashMode.torch : FlashMode.off);
+                  setState(() {});
+                } catch (_) {}
+              },
             ),
           ),
+
+          // Focus ring indicator (briefly shown)
+          if (_lastFocusTap != null && _lastFocusAt != null && DateTime.now().difference(_lastFocusAt!) < const Duration(seconds: 2))
+            Positioned(
+              left: _lastFocusTap!.dx - 22,
+              top: _lastFocusTap!.dy - 22,
+              child: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.transparent,
+                  border: Border.all(color: Colors.yellowAccent, width: 2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
 
           Positioned(
             left: 0,
             right: 0,
             bottom: 0,
-          child: Container(
+            child: Container(
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.35),
+                color: Theme.of(context).colorScheme.surface.withOpacity(0.92),
+                border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                boxShadow: const [BoxShadow(blurRadius: 12, color: Colors.black26)],
               ),
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
               child: Column(
@@ -372,7 +603,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   if (_extractedText.isNotEmpty) ...[
                     Card(
                       margin: const EdgeInsets.only(bottom: 8),
-                      color: Colors.white,
+                      color: Theme.of(context).colorScheme.surface,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       child: Padding(
                         padding: const EdgeInsets.all(10),
@@ -381,7 +612,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                           children: [
                             Row(
                               children: [
-                                const Text('Extracted Text', style: TextStyle(fontWeight: FontWeight.w600)),
+                                Text('Extracted Text', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600)),
                                 const Spacer(),
                                 IconButton(
                                   icon: const Icon(Icons.copy_rounded, size: 18),
@@ -407,12 +638,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
                                 _extractedText,
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: Colors.black87),
+                                style: Theme.of(context).textTheme.bodyMedium,
                               ),
                               secondChild: ConstrainedBox(
                                 constraints: const BoxConstraints(maxHeight: 120),
                                 child: SingleChildScrollView(
-                                  child: Text(_extractedText, style: const TextStyle(color: Colors.black87)),
+                                  child: Text(_extractedText, style: Theme.of(context).textTheme.bodyMedium),
                                 ),
                               ),
                             ),
@@ -425,11 +656,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     spacing: 8,
                     runSpacing: -6,
                     children: _suggestions.take(6).map((t) {
-                      return ChoiceChip(
-                        label: Text(t, style: const TextStyle(color: Colors.white)),
+                      return FilterChip(
+                        label: Text(t),
                         selected: _extractedText.contains(t),
-                        selectedColor: Colors.blueAccent.withOpacity(0.6),
-                        backgroundColor: Colors.white24,
+                        showCheckmark: false,
                         onSelected: (_) {
                           setState(() {
                             _extractedText = (_extractedText.isEmpty ? t : '$_extractedText $t');
@@ -443,10 +673,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     children: [
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: _isCapturing ? null : _matchScannedText,
+                          onPressed: _isCapturing || !widget.fdaChecker.isLoaded ? null : _matchScannedText,
                           child: _isCapturing
                               ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                              : const Text('Confirm'),
+                              : Text(widget.fdaChecker.isLoaded ? 'Confirm' : 'Loading…'),
                         ),
                       ),
                     ],

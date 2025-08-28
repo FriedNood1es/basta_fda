@@ -63,7 +63,6 @@ class LoginScreen extends StatelessWidget {
                             final s = SettingsService.instance;
                             await s.load();
                             s.isLoggedIn = true; // mark as logged in
-                            s.guestMode = false;
                             await s.save();
                             if (!context.mounted) return;
                             Navigator.pushReplacement(
@@ -88,20 +87,12 @@ class LoginScreen extends StatelessWidget {
                           const Text('•'),
                           const SizedBox(width: 6),
                           TextButton(
-                            onPressed: () async {
-                              final s = SettingsService.instance;
-                              await s.load();
-                              s.guestMode = true; // remember guest session
-                              s.isLoggedIn = false;
-                              await s.save();
-                              if (!context.mounted) return;
-                              Navigator.pushReplacement(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => ScannerScreen(cameras: cameras, fdaChecker: fdaChecker),
-                                ),
-                              );
-                            },
+                            onPressed: () => Navigator.pushReplacement(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ScannerScreen(cameras: cameras, fdaChecker: fdaChecker),
+                              ),
+                            ),
                             child: const Text('Skip for now'),
                           ),
                         ],

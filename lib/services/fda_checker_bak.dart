@@ -58,24 +58,27 @@ class FDAChecker {
   }
 
   /// Try to extract registration number candidates from scanned text.
-  /// Looks for patterns like "Reg. No.: DRP-12345" or explicit DRP-like codes.
+  /// Looks for patterns like "Reg. No.: ABC-12345" or standalone code-like tokens.
   List<String> _extractRegCandidates(String raw) {
     final List<String> out = [];
     final text = raw; // preserve separators for regex
-    // 1) Explicit code pattern seen in dataset: e.g., DRP-4935 or DRP-4961-03
+    // 1) Labeled formats: "Reg. No.: DRP-4935"
+    final reLabeled = RegExp(r'(reg(istration)?\.?\s*(no\.?|number)?\s*[:#-]?\s*)([A-Za-z0-9\-/]+)', caseSensitive: false);
+    for (final m in reLabeled.allMatches(text)) {
+      final code = m.group(5);
+      if (code != null && code.trim().length >= 5) out.add(code.trim());
+    }
+    // 2) Explicit code pattern seen in dataset: e.g., DRP-4935 or DRP-4961-03
     //    Pattern: (3–4 letters)-(3–6 digits)[-(2–4 digits)]
     final explicitCode = RegExp(r'\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b');
     for (final m in explicitCode.allMatches(text)) {
       out.add(m.group(0)!.trim());
     }
-    // 2) Labeled formats: "Reg. No.: DRP-4935" strictly capturing explicit code format only
-    final reLabeledStrict = RegExp(
-      r'\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?)\b',
-      caseSensitive: false,
-    );
-    for (final m in reLabeledStrict.allMatches(text)) {
-      final code = m.group(1);
-      if (code != null) out.add(code.trim());
+    // 3) Fallback token pattern (letters+digits, at least 5 chars)
+    final tokenRe = RegExp(r'[A-Za-z]{2,}[0-9]{2,}[A-Za-z0-9\-/]*');
+    for (final m in tokenRe.allMatches(text)) {
+      final t = m.group(0) ?? '';
+      if (t.length >= 5) out.add(t);
     }
     final seen = <String>{};
     final dedup = <String>[];
@@ -219,7 +222,7 @@ class FDAChecker {
 
       // If we found a plausible brand candidate, use it
       if (bestBrandRow != null && bestBrandScore >= 1.5) {
-        debugPrint('[FDAChecker] brand-first match: brand=${bestBrandRow[3]} | strength=${bestBrandRow[4]}');
+        debugPrint('[FDAChecker] brand-first match: brand=' + bestBrandRow[3].toString() + ' | strength=' + bestBrandRow[4].toString());
         return _buildMap(bestBrandRow);
       }
     }
@@ -236,7 +239,7 @@ class FDAChecker {
         if (g.contains('amlodipine')) amlCount++;
         if (b.contains('lodibes')) lodCount++;
       }
-      debugPrint('[FDAChecker] rows=${_data.length} | scan aml=$hasAml, lod=$hasLod | rows aml=$amlCount, lod=$lodCount');
+      debugPrint('[FDAChecker] rows=' + _data.length.toString() + ' | scan aml=' + hasAml.toString() + ', lod=' + hasLod.toString() + ' | rows aml=' + amlCount.toString() + ', lod=' + lodCount.toString());
     } catch (_) {}
 
     // Quick pre-pass fallback: if scan contains clear generic/brand tokens,
@@ -263,7 +266,7 @@ class FDAChecker {
       }
 
       if (preRow != null && preBest >= 1.0) {
-        debugPrint('[FDAChecker] prepass fallback match: brand=${preRow[3]} | score=$preBest');
+        debugPrint('[FDAChecker] prepass fallback match: brand=' + preRow[3].toString() + ' | score=' + preBest.toString());
         return _buildMap(preRow);
       }
     }
@@ -275,7 +278,7 @@ class FDAChecker {
         final normBrand = _normalizeText(row[3]);
         final normGeneric = _normalizeText(row[2]);
         if (normBrand.contains('lodibes') && normGeneric.contains('amlodipine')) {
-          debugPrint('[FDAChecker] deterministic match (lodibes+amlodipine): ${row[3]}');
+          debugPrint('[FDAChecker] deterministic match (lodibes+amlodipine): ' + row[3].toString());
           return _buildMap(row);
         }
       }
@@ -286,7 +289,7 @@ class FDAChecker {
         if (row.length < 17) continue;
         final normGeneric = _normalizeText(row[2]);
         if (normGeneric.contains('amlodipine')) {
-          debugPrint('[FDAChecker] deterministic match (amlodipine only): ${row[3]}');
+          debugPrint('[FDAChecker] deterministic match (amlodipine only): ' + row[3].toString());
           return _buildMap(row);
         }
       }
@@ -442,27 +445,26 @@ class FDAChecker {
 
   /// Build a map for easy display in Scan Result Screen
   Map<String, String> _buildMap(List<dynamic> row) {
-    String cell(int i) => (i >= 0 && i < row.length) ? (row[i]?.toString() ?? '') : '';
+    Map<String, String> product = {};
 
-    final Map<String, String> product = {};
-
-    // Store every column as string, if present
+    // Store every column
     for (int i = 0; i < row.length; i++) {
-      product['col_$i'] = row[i]?.toString() ?? '';
+      product["col_$i"] = row[i];
     }
 
-    // Add friendly keys with bounds safety
-    product['reg_no'] = cell(1);
-    product['generic_name'] = cell(2);
-    product['brand_name'] = cell(3);
-    product['dosage_strength'] = cell(4);
-    product['dosage_form'] = cell(5);
-    product['manufacturer'] = cell(9);
-    product['country'] = cell(10);
-    product['distributor'] = cell(13);
-    product['issuance_date'] = cell(15);
-    product['expiry_date'] = cell(16);
+    // Add friendly keys
+    product["reg_no"] = row[1];
+    product["generic_name"] = row[2];
+    product["brand_name"] = row[3];
+    product["dosage_strength"] = row[4];
+    product["dosage_form"] = row[5];
+    product["manufacturer"] = row[9];
+    product["country"] = row[10];
+    product["distributor"] = row[13];
+    product["issuance_date"] = row[15];
+    product["expiry_date"] = row[16];
 
     return product;
   }
 }
+
