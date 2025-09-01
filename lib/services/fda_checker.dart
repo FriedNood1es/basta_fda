@@ -2,11 +2,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:csv/csv.dart';
 import 'package:string_similarity/string_similarity.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:basta_fda/services/settings_service.dart';
 
 class FDAChecker {
   List<List<dynamic>> _data = [];
   DateTime? _loadedAt;
   final Map<String, List<dynamic>> _regIndex = {};
+  static const String _cacheFileName = 'FDA_Products.csv';
 
   bool get isLoaded => _data.isNotEmpty;
   int get rowCount => _data.isNotEmpty ? _data.length - 1 : 0; // minus header row
@@ -115,14 +119,18 @@ class FDAChecker {
         List<dynamic>? row = _regIndex[key];
         if (row != null) {
           debugPrint('[FDAChecker] reg-no exact match: ${row[1]}');
-          return _buildMap(row);
+          final m = _buildMap(row);
+          m['match_reason'] = 'Registration number exact match';
+          return m;
         }
         // try tolerant variants for common OCR swaps
         for (final v in _regVariants(key)) {
           row = _regIndex[v];
           if (row != null) {
             debugPrint('[FDAChecker] reg-no tolerant match: ${row[1]} (from $c)');
-            return _buildMap(row);
+            final m = _buildMap(row);
+            m['match_reason'] = 'Registration number close match (OCR tolerant)';
+            return m;
           }
         }
       }
@@ -149,6 +157,18 @@ class FDAChecker {
     }
   }
 
+  bool _hasMedicineCue(String normalized) {
+    return normalized.contains('mg') ||
+        normalized.contains('tablet') ||
+        normalized.contains('capsule') ||
+        normalized.contains('syrup') ||
+        normalized.contains('cream') ||
+        normalized.contains('ointment') ||
+        normalized.contains('solution') ||
+        normalized.contains('suspension') ||
+        normalized.contains('injection');
+  }
+
   /// Fuzzy + token-based match algorithm
   Map<String, String>? findProductDetails(String scannedText) {
     if (_data.isEmpty) {
@@ -164,8 +184,14 @@ class FDAChecker {
     // prefer rows whose brand tokens overlap and tie-break by generic, strength,
     // dosage form, and distributor hits from the scan text.
     {
+      final strict = SettingsService.instance.strictMatching;
       double bestBrandScore = -1e9;
       List<dynamic>? bestBrandRow;
+      // Evidence trackers for stricter acceptance
+      int bestBrandOverlapCount = 0;
+      bool bestGenOverlap = false;
+      bool bestMgHit = false;
+      bool bestFormCue = false;
 
       // Extract mg strengths from the scan (e.g., 5mg, 10 mg)
       final mgMatches = RegExp(r"(\d{1,3})\s*mg").allMatches(normalizedScan).map((m) => m.group(1)!).toSet();
@@ -194,18 +220,22 @@ class FDAChecker {
 
         // Generic token overlap (e.g., amlodipine)
         final genTokens = normGeneric.split(' ').where((t) => t.length >= 5).toSet();
-        if (genTokens.intersection(scanTokenSet).isNotEmpty) s += 2.0;
+        final genOverlap = genTokens.intersection(scanTokenSet).isNotEmpty;
+        if (genOverlap) s += 2.0;
 
         // Strength match (any scanned mg appearing in this row's strength)
+        bool mgHit = false;
         for (final n in mgMatches) {
           if (normStrength.contains('$n mg') || normStrength.contains('${n}mg')) {
             s += 1.0;
+            mgHit = true;
           }
         }
 
         // Dosage form cues
-        if (hasTablet && normForm.contains('tablet')) s += 0.6;
-        if (hasCapsule && normForm.contains('capsule')) s += 0.6;
+        bool formCue = false;
+        if (hasTablet && normForm.contains('tablet')) { s += 0.6; formCue = true; }
+        if (hasCapsule && normForm.contains('capsule')) { s += 0.6; formCue = true; }
 
         // Distributor token overlap (e.g., tgp)
         final distTokens = normDistributor.split(' ').where((t) => t.length >= 3).toSet();
@@ -214,13 +244,26 @@ class FDAChecker {
         if (s > bestBrandScore) {
           bestBrandScore = s;
           bestBrandRow = row;
+          bestBrandOverlapCount = overlap.length;
+          bestGenOverlap = genOverlap;
+          bestMgHit = mgHit;
+          bestFormCue = formCue;
         }
       }
 
-      // If we found a plausible brand candidate, use it
-      if (bestBrandRow != null && bestBrandScore >= 1.5) {
-        debugPrint('[FDAChecker] brand-first match: brand=${bestBrandRow[3]} | strength=${bestBrandRow[4]}');
-        return _buildMap(bestBrandRow);
+      // If we found a plausible brand candidate, accept only with enough evidence
+      if (bestBrandRow != null) {
+        final hasCue = _hasMedicineCue(normalizedScan) || bestMgHit || bestFormCue;
+        final enoughEvidenceStrict = bestBrandOverlapCount >= 1 && bestGenOverlap && (bestMgHit || bestFormCue);
+        final enoughEvidenceLoose = (bestBrandOverlapCount >= 1 && (bestGenOverlap || bestMgHit || bestFormCue)) || (bestGenOverlap && (bestMgHit || bestFormCue));
+        final threshold = strict ? 2.6 : 2.2;
+        final enough = strict ? enoughEvidenceStrict : enoughEvidenceLoose;
+        if (bestBrandScore >= threshold && hasCue && enough) {
+          debugPrint('[FDAChecker] brand-first match: brand=${bestBrandRow[3]} | strength=${bestBrandRow[4]}');
+          final m = _buildMap(bestBrandRow);
+          m['match_reason'] = 'Brand-first: brand/generic/strength/form overlap';
+          return m;
+        }
       }
     }
 
@@ -262,9 +305,12 @@ class FDAChecker {
         }
       }
 
-      if (preRow != null && preBest >= 1.0) {
+      final strict = SettingsService.instance.strictMatching;
+      if (!strict && preRow != null && preBest >= 2.5 && _hasMedicineCue(normalizedScan)) {
         debugPrint('[FDAChecker] prepass fallback match: brand=${preRow[3]} | score=$preBest');
-        return _buildMap(preRow);
+        final m = _buildMap(preRow);
+        m['match_reason'] = 'Token overlap (brand/generic)';
+        return m;
       }
     }
 
@@ -276,7 +322,9 @@ class FDAChecker {
         final normGeneric = _normalizeText(row[2]);
         if (normBrand.contains('lodibes') && normGeneric.contains('amlodipine')) {
           debugPrint('[FDAChecker] deterministic match (lodibes+amlodipine): ${row[3]}');
-          return _buildMap(row);
+          final m = _buildMap(row);
+          m['match_reason'] = 'Deterministic contains: brand and generic present';
+          return m;
         }
       }
     }
@@ -287,7 +335,9 @@ class FDAChecker {
         final normGeneric = _normalizeText(row[2]);
         if (normGeneric.contains('amlodipine')) {
           debugPrint('[FDAChecker] deterministic match (amlodipine only): ${row[3]}');
-          return _buildMap(row);
+          final m = _buildMap(row);
+          m['match_reason'] = 'Generic present';
+          return m;
         }
       }
     }
@@ -361,9 +411,34 @@ class FDAChecker {
     }
 
     // ✅ Only accept if score is meaningful
-    if (bestMatch != null && (bestScore >= 1.5 || bestHasStrongExactMatch)) {
-      debugPrint("✅ Best match: Brand=${bestMatch[3]} | Score=$bestScore");
-      return _buildMap(bestMatch);
+    if (bestMatch != null) {
+      final strict = SettingsService.instance.strictMatching;
+      // Re-evaluate evidence on the best row to avoid false positives
+      final normBrand = _normalizeText(bestMatch[3]);
+      final normGeneric = _normalizeText(bestMatch[2]);
+      final normStrength = _normalizeText(bestMatch[4]);
+      final normForm = _normalizeText(bestMatch[5]);
+      final brandTokens = normBrand.split(' ').where((t) => t.isNotEmpty).toSet();
+      final genericTokens = normGeneric.split(' ').where((t) => t.isNotEmpty).toSet();
+      final brandHits = brandTokens.intersection(scanTokenSet).length;
+      final genericHits = genericTokens.intersection(scanTokenSet).length;
+      final mgHit = RegExp(r"(\d{1,3})\s*mg").allMatches(normalizedScan).any((m) {
+        final n = m.group(1)!;
+        return normStrength.contains('$n mg') || normStrength.contains('${n}mg');
+      });
+      final formCue = (normalizedScan.contains('tablet') && normForm.contains('tablet')) ||
+          (normalizedScan.contains('capsule') && normForm.contains('capsule'));
+      final hasCue = _hasMedicineCue(normalizedScan) || mgHit || formCue;
+      final enoughEvidence = (brandHits >= 1 && genericHits >= 1) ||
+          (brandHits >= 1 && (mgHit || formCue));
+
+      final threshold = strict ? 2.6 : 2.2;
+      final enough = strict ? (brandHits >= 1 && genericHits >= 1 && (mgHit || formCue)) : (enoughEvidence || bestHasStrongExactMatch);
+      final accept = hasCue && bestScore >= threshold && enough;
+      if (accept) {
+        debugPrint("✅ Best match: Brand=${bestMatch[3]} | Score=$bestScore");
+        return _buildMap(bestMatch);
+      }
     }
 
     debugPrint("❌ No match found for scanned text.");
@@ -465,4 +540,152 @@ class FDAChecker {
 
     return product;
   }
+
+  /// Load FDA CSV using a background isolate (non-blocking UI).
+  Future<void> loadCSVIsolate() async {
+    try {
+      final rawData = await rootBundle.loadString('assets/ALL_DrugProducts.csv');
+      final result = await compute(_parseAndIndexCsv, rawData);
+      _data = result.data;
+      _regIndex
+        ..clear()
+        ..addAll(result.regIndex);
+      _loadedAt = DateTime.now();
+      debugPrint('✅ FDA CSV loaded successfully (isolate). Rows: ${_data.length}');
+    } catch (e) {
+      debugPrint('⛔ Error loading FDA CSV (isolate): $e');
+    }
+  }
+
+  /// Wrapper that adds a default explanation if base method doesn't.
+  Map<String, String>? findProductDetailsWithExplain(String scannedText) {
+    final m = findProductDetails(scannedText);
+    if (m != null && !m.containsKey('match_reason')) {
+      m['match_reason'] = 'Heuristic token match';
+    }
+    return m;
+  }
+
+  /// Load FDA CSV preferring a cached file stored in app documents.
+  Future<void> loadCSVIsolatePreferCache() async {
+    try {
+      String rawData;
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        final f = File('${dir.path}/$_cacheFileName');
+        rawData = await (await f.exists() ? f.readAsString() : rootBundle.loadString('assets/ALL_DrugProducts.csv'));
+      } catch (_) {
+        rawData = await rootBundle.loadString('assets/ALL_DrugProducts.csv');
+      }
+      final result = await compute(_parseAndIndexCsv, rawData);
+      _data = result.data;
+      _regIndex
+        ..clear()
+        ..addAll(result.regIndex);
+      _loadedAt = DateTime.now();
+      debugPrint('✅ FDA CSV loaded (prefer cache). Rows: ${_data.length}');
+    } catch (e) {
+      debugPrint('❌ Error loading FDA CSV (prefer cache): $e');
+    }
+  }
+
+  /// Download latest FDA CSV from a URL, cache to disk, and reload.
+  /// Returns true on success.
+  Future<bool> updateFromUrl(String url) async {
+    try {
+      final client = HttpClient();
+      final req = await client.getUrl(Uri.parse(url));
+      final res = await req.close();
+      if (res.statusCode != 200) {
+        debugPrint('❌ Update failed: HTTP ${res.statusCode}');
+        return false;
+      }
+      final bytes = await consolidateHttpClientResponseBytes(res);
+      final csv = String.fromCharCodes(bytes);
+      final dir = await getApplicationDocumentsDirectory();
+      final out = File('${dir.path}/$_cacheFileName');
+      await out.writeAsString(csv, flush: true);
+      await loadCSVIsolatePreferCache();
+      return true;
+    } catch (e) {
+      debugPrint('❌ Update failed: $e');
+      return false;
+    }
+  }
+
+  /// Evaluate matched product against raw OCR to produce a status and reasons.
+  /// Status: VERIFIED | EXPIRED | ALERT
+  ({String status, List<String> reasons}) evaluateScan({
+    required String raw,
+    required Map<String, String> product,
+  }) {
+    String status = 'VERIFIED';
+    final reasons = <String>[];
+
+    // Expiry
+    final exp = _parseDate(product['expiry_date']);
+    if (exp != null && exp.isBefore(DateTime.now())) {
+      status = 'EXPIRED';
+      reasons.add('FDA record expired on ${product['expiry_date'] ?? ''}');
+    }
+
+    // Reg. No. mismatch between package and FDA record
+    final cands = _extractRegCandidates(raw).map(_normalizeReg).toSet();
+    final reg = _normalizeReg(product['reg_no'] ?? '');
+    if (cands.isNotEmpty && reg.isNotEmpty && !cands.contains(reg)) {
+      if (status == 'VERIFIED') status = 'ALERT';
+      reasons.add('Registration number on pack differs from FDA record');
+    }
+
+    return (status: status, reasons: reasons);
+  }
+
+  DateTime? _parseDate(String? s) {
+    if (s == null || s.trim().isEmpty) return null;
+    final v = s.trim();
+    final iso = DateTime.tryParse(v);
+    if (iso != null) return iso;
+    final m = RegExp(r'^(\d{1,2})[\-/](\d{1,2})[\-/](\d{2,4})$').firstMatch(v);
+    if (m != null) {
+      final mm = int.tryParse(m.group(1)!);
+      final dd = int.tryParse(m.group(2)!);
+      var yy = int.tryParse(m.group(3)!);
+      if (mm != null && dd != null && yy != null) {
+        if (yy < 100) yy += 2000;
+        return DateTime(yy, mm, dd);
+      }
+    }
+    return null;
+  }
+}
+
+/// Parsed FDA data + registration index result from isolate
+class _ParsedFdaData {
+  final List<List<dynamic>> data;
+  final Map<String, List<dynamic>> regIndex;
+  _ParsedFdaData({required this.data, required this.regIndex});
+}
+
+/// Top-level function to allow `compute` to run it on a background isolate.
+_ParsedFdaData _parseAndIndexCsv(String rawData) {
+  // Parse respecting quoted newlines
+  final parsedData = const CsvToListConverter().convert(rawData);
+  // Normalize
+  final norm = parsedData
+      .map((row) => row.map((cell) => cell.toString().toLowerCase().trim()).toList())
+      .toList();
+
+  // Build index
+  final Map<String, List<dynamic>> regIdx = {};
+  String normalizeReg(String input) => input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+  for (final row in norm.skip(1)) {
+    if (row.length < 2) continue;
+    final reg = (row[1] ?? '').toString();
+    if (reg.isEmpty) continue;
+    final n = normalizeReg(reg);
+    if (n.isEmpty) continue;
+    regIdx[n] = row;
+  }
+
+  return _ParsedFdaData(data: norm, regIndex: regIdx);
 }

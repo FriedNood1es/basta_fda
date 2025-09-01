@@ -65,8 +65,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
         _stopStream();
       }
     });
-    // Ensure FDA data is loading; refresh UI when ready
-    widget.fdaChecker.loadCSV().then((_) {
+    // Ensure FDA data is loading; prefer cached copy when available
+    widget.fdaChecker.loadCSVIsolatePreferCache().then((_) {
       if (mounted) setState(() {});
     });
   }
@@ -74,7 +74,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Future<void> _initCamera() async {
     _controller = CameraController(
       widget.cameras.first,
-      ResolutionPreset.high,
+      ResolutionPreset.max,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
@@ -82,9 +82,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
     try {
       _minZoom = await _controller!.getMinZoomLevel();
       _maxZoom = await _controller!.getMaxZoomLevel();
-      _currentZoom = _minZoom;
+      // Set a gentle default zoom (helps OCR without blur)
+      final desired = 1.5;
+      _currentZoom = desired.clamp(_minZoom, _maxZoom);
       await _controller!.setZoomLevel(_currentZoom);
       await _controller!.setFocusMode(FocusMode.auto);
+      try { await _controller!.setExposureMode(ExposureMode.auto); } catch (_) {}
     } catch (_) {}
     setState(() => _isInitialized = true);
     // Do not start stream by default to avoid ImageReader buffer pressure.
@@ -199,10 +202,15 @@ class _ScannerScreenState extends State<ScannerScreen> {
       try {
         final center = const Offset(0.5, 0.5);
         await _controller!.setFocusMode(FocusMode.auto);
+        try { await _controller!.setExposureMode(ExposureMode.auto); } catch (_) {}
         await _controller!.setFocusPoint(center);
         await _controller!.setExposurePoint(center);
-        await Future.delayed(const Duration(milliseconds: 250));
+        // Small settle delay for AF/AE to converge
+        await Future.delayed(const Duration(milliseconds: 450));
       } catch (_) {}
+
+      // Lock orientation during capture when possible to prevent rotation glitches
+      try { await _controller!.lockCaptureOrientation(); } catch (_) {}
 
       final XFile file = await _controller!.takePicture();
       final inputImage = InputImage.fromFilePath(file.path);
@@ -233,6 +241,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         if (_liveMode) {
           await _startStream();
         }
+        try { await _controller!.unlockCaptureOrientation(); } catch (_) {}
       }
     }
   }
@@ -271,9 +280,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   Future<void> _reviewAndSearch({String? preset, bool capturePhoto = true}) async {
     // Start with preset or capture a fresh still for reliable OCR
-    final text = capturePhoto ? await _scanFromPhoto() : preset;
+    final first = capturePhoto ? await _scanFromPhoto() : preset;
     if (!mounted) return;
-    String working = text ?? _extractedText;
+    String working = first ?? _extractedText;
 
     await showModalBottomSheet(
       context: context,
@@ -374,6 +383,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
     );
   }
 
+  
+
   Future<void> _executeSearch(String text) async {
     // Prefer direct Reg. No. match using raw OCR (more reliable for patterns)
     final raw = _lastRawText ?? text;
@@ -381,16 +392,21 @@ class _ScannerScreenState extends State<ScannerScreen> {
     // If a reg-like code is present but not found, avoid heuristic false positives
     final regLike = RegExp(r"\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b").hasMatch(raw) ||
         RegExp(r"\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b", caseSensitive: false).hasMatch(raw);
-    final matchedProduct = byReg ?? (regLike ? null : widget.fdaChecker.findProductDetails(text));
+    final matchedProduct = byReg ?? (regLike ? null : widget.fdaChecker.findProductDetailsWithExplain(text));
     if (!mounted) return;
     if (matchedProduct != null) {
-      await HistoryService.instance.addEntry(scannedText: text, productInfo: matchedProduct, status: 'VERIFIED');
+      final eval = widget.fdaChecker.evaluateScan(raw: raw, product: matchedProduct);
+      final status = eval.status;
+      if (eval.reasons.isNotEmpty) {
+        matchedProduct['verification_reasons'] = eval.reasons.join('\n');
+      }
+      await HistoryService.instance.addEntry(scannedText: text, productInfo: matchedProduct, status: status);
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => ScanResultScreen(
             productInfo: matchedProduct,
-            status: 'VERIFIED',
+            status: status,
           ),
         ),
       );
@@ -436,35 +452,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
 appBar: AppBar(
         title: const Text('Scan Product'),
         actions: [
-          IconButton(
-            tooltip: 'Logout',
-            icon: const Icon(Icons.logout_rounded),
-            onPressed: () async {
-              final ok = await showDialog<bool>(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: const Text('End session?'),
-                  content: const Text('You will return to the login screen.'),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                    ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('OK')),
-                  ],
-                ),
-              );
-              if (ok == true) {
-                final s = SettingsService.instance;
-                await s.load();
-                s.isLoggedIn = false;
-                s.guestMode = false;
-                await s.save();
-                if (!mounted) return;
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (_) => LoginScreen(cameras: widget.cameras, fdaChecker: widget.fdaChecker)),
-                  (route) => false,
-                );
-              }
-            },
-          ),
           IconButton(
             tooltip: 'History',
             icon: const Icon(Icons.history_rounded),
@@ -550,6 +537,8 @@ appBar: AppBar(
                 ),
               ),
             ),
+
+          // (Multi-shot overlay removed)
 
           Positioned(
             top: 12,

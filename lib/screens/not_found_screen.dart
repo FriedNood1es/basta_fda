@@ -28,11 +28,9 @@ class _NotFoundScreenState extends State<NotFoundScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('No Match Found')),
-      body: Padding(
+      body: ListView(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+        children: [
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -89,7 +87,7 @@ class _NotFoundScreenState extends State<NotFoundScreen> {
                 );
               }),
             ],
-            const Spacer(),
+            const SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
@@ -110,9 +108,7 @@ class _NotFoundScreenState extends State<NotFoundScreen> {
               ],
             ),
           ],
-        ),
       ),
     );
   }
 }
-

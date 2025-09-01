@@ -24,17 +24,19 @@ class ScanResultScreen extends StatelessWidget {
     String upperOrNA(String? s) => (s == null || s.isEmpty) ? 'N/A' : s.toUpperCase();
     String niceDate(String? s) => titleCase(s);
 
-    Color statusColor(String status, ThemeData theme) {
-      switch (status.toUpperCase()) {
-        case 'VERIFIED':
-          return Colors.green.shade600;
-        case 'EXPIRED':
-          return Colors.orange.shade700;
-        case 'NOT FOUND':
-          return theme.colorScheme.error;
-        default:
-          return theme.colorScheme.primary;
-      }
+  Color statusColor(String status, ThemeData theme) {
+    switch (status.toUpperCase()) {
+      case 'VERIFIED':
+        return Colors.green.shade600;
+      case 'EXPIRED':
+        return Colors.orange.shade700;
+      case 'ALERT':
+        return theme.colorScheme.error;
+      case 'NOT FOUND':
+        return theme.colorScheme.error;
+      default:
+        return theme.colorScheme.primary;
+    }
     }
 
     final theme = Theme.of(context);
@@ -173,6 +175,64 @@ class ScanResultScreen extends StatelessWidget {
 
             const SizedBox(height: 20),
 
+            // Why it matched (if available)
+            if ((productInfo['match_reason'] ?? '').isNotEmpty) ...[
+              Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline_rounded, color: theme.colorScheme.primary),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Why this matched', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                            const SizedBox(height: 6),
+                            Text(productInfo['match_reason'] ?? ''),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
+
+            // Why this status (e.g., EXPIRED or ALERT)
+            if ((productInfo['verification_reasons'] ?? '').isNotEmpty) ...[
+              Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.warning_amber_rounded, color: sColor),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Why this status', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                            const SizedBox(height: 6),
+                            Text(productInfo['verification_reasons'] ?? ''),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
+
             // Report button
             SizedBox(
               width: double.infinity,
@@ -255,4 +315,3 @@ class _DetailRow extends StatelessWidget {
     );
   }
 }
-

@@ -36,7 +36,7 @@ class AppTheme {
       chipTheme: ChipThemeData(
         shape: StadiumBorder(side: BorderSide(color: scheme.outlineVariant)),
         selectedColor: scheme.primaryContainer,
-        backgroundColor: scheme.surfaceVariant,
+        backgroundColor: scheme.surfaceContainerHighest,
         labelStyle: TextStyle(color: scheme.onSurface),
       ),
       dividerTheme: DividerThemeData(color: scheme.outlineVariant),
