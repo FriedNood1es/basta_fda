@@ -222,7 +222,7 @@ class FDAChecker {
 
       // If we found a plausible brand candidate, use it
       if (bestBrandRow != null && bestBrandScore >= 1.5) {
-        debugPrint('[FDAChecker] brand-first match: brand=' + bestBrandRow[3].toString() + ' | strength=' + bestBrandRow[4].toString());
+        debugPrint('[FDAChecker] brand-first match: brand=${bestBrandRow[3]} | strength=${bestBrandRow[4]}');
         return _buildMap(bestBrandRow);
       }
     }
@@ -239,7 +239,7 @@ class FDAChecker {
         if (g.contains('amlodipine')) amlCount++;
         if (b.contains('lodibes')) lodCount++;
       }
-      debugPrint('[FDAChecker] rows=' + _data.length.toString() + ' | scan aml=' + hasAml.toString() + ', lod=' + hasLod.toString() + ' | rows aml=' + amlCount.toString() + ', lod=' + lodCount.toString());
+      debugPrint('[FDAChecker] rows=${_data.length} | scan aml=$hasAml, lod=$hasLod | rows aml=$amlCount, lod=$lodCount');
     } catch (_) {}
 
     // Quick pre-pass fallback: if scan contains clear generic/brand tokens,
@@ -266,7 +266,7 @@ class FDAChecker {
       }
 
       if (preRow != null && preBest >= 1.0) {
-        debugPrint('[FDAChecker] prepass fallback match: brand=' + preRow[3].toString() + ' | score=' + preBest.toString());
+        debugPrint('[FDAChecker] prepass fallback match: brand=${preRow[3]} | score=$preBest');
         return _buildMap(preRow);
       }
     }
@@ -277,10 +277,10 @@ class FDAChecker {
         if (row.length < 17) continue;
         final normBrand = _normalizeText(row[3]);
         final normGeneric = _normalizeText(row[2]);
-        if (normBrand.contains('lodibes') && normGeneric.contains('amlodipine')) {
-          debugPrint('[FDAChecker] deterministic match (lodibes+amlodipine): ' + row[3].toString());
-          return _buildMap(row);
-        }
+          if (normBrand.contains('lodibes') && normGeneric.contains('amlodipine')) {
+            debugPrint('[FDAChecker] deterministic match (lodibes+amlodipine): ${row[3]}');
+            return _buildMap(row);
+          }
       }
     }
     // If only generic is present, pick the first amlodipine entry
@@ -289,7 +289,7 @@ class FDAChecker {
         if (row.length < 17) continue;
         final normGeneric = _normalizeText(row[2]);
         if (normGeneric.contains('amlodipine')) {
-          debugPrint('[FDAChecker] deterministic match (amlodipine only): ' + row[3].toString());
+          debugPrint('[FDAChecker] deterministic match (amlodipine only): ${row[3]}');
           return _buildMap(row);
         }
       }

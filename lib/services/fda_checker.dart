@@ -4,17 +4,24 @@ import 'package:csv/csv.dart';
 import 'package:string_similarity/string_similarity.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
+import 'package:basta_fda/services/fda_firebase_updater.dart';
 import 'package:basta_fda/services/settings_service.dart';
 
 class FDAChecker {
   List<List<dynamic>> _data = [];
   DateTime? _loadedAt;
   final Map<String, List<dynamic>> _regIndex = {};
-  static const String _cacheFileName = 'FDA_Products.csv';
+  static const String _cacheFileName = 'FDA_Products_cached.csv';
+  static const Duration _staleAfter = Duration(days: 30);
 
   bool get isLoaded => _data.isNotEmpty;
   int get rowCount => _data.isNotEmpty ? _data.length - 1 : 0; // minus header row
   DateTime? get loadedAt => _loadedAt;
+  bool get isStale {
+    final last = SettingsService.instance.fdaLastUpdatedAt ?? _loadedAt;
+    if (last == null) return true;
+    return DateTime.now().difference(last) > _staleAfter;
+  }
 
   /// Load FDA CSV and clean it
   Future<void> loadCSV() async {
@@ -34,7 +41,7 @@ class FDAChecker {
       _regIndex.clear();
       for (final row in _data.skip(1)) {
         if (row.length < 2) continue;
-        final reg = (row[1] ?? '').toString();
+        final reg = row[1].toString();
         if (reg.isEmpty) continue;
         final n = _normalizeReg(reg);
         if (n.isEmpty) continue;
@@ -103,7 +110,7 @@ class FDAChecker {
       if (_regIndex.isEmpty && _data.length > 1) {
         for (final row in _data.skip(1)) {
           if (row.length < 2) continue;
-          final reg = (row[1] ?? '').toString();
+          final reg = row[1].toString();
           if (reg.isEmpty) continue;
           final n = _normalizeReg(reg);
           if (n.isEmpty) continue;
@@ -154,6 +161,53 @@ class FDAChecker {
       for (final a in alts) {
         yield key.substring(0, i) + a + key.substring(i + 1);
       }
+    }
+  }
+
+  /// Ensure FDA data is loaded and reasonably fresh.
+  /// - Loads from cache/asset first.
+  /// - If a Settings URL is configured and data is stale, attempts a background update
+  ///   with simple backoff retries.
+  Future<void> ensureLoadedAndFresh() async {
+    // Load something first so the app can function offline
+    if (!isLoaded) {
+      await loadCSVIsolatePreferCache();
+    }
+
+    try {
+      final s = SettingsService.instance;
+      await s.load();
+      final url = (s.fdaUpdateUrl ?? '').trim();
+      final now = DateTime.now();
+      final last = s.fdaLastUpdatedAt ?? _loadedAt;
+      final isStale = last == null || now.difference(last) > _staleAfter;
+      if (!isStale) return;
+
+      // Prefer explicit URL if configured; otherwise try Firebase manifest.
+      if (url.isEmpty) {
+        final ok = await FdaFirebaseUpdater(cacheFileName: _cacheFileName).updateFromManifest();
+        if (ok) {
+          await loadCSVIsolatePreferCache();
+          s.fdaLastUpdatedAt = DateTime.now();
+          await s.save();
+          return;
+        }
+        // If Firebase path fails, nothing else to do here.
+        return;
+      }
+
+      // Try up to 2 times with small backoff
+      for (int attempt = 0; attempt < 2; attempt++) {
+        final ok = await updateFromUrl(url);
+        if (ok) {
+          s.fdaLastUpdatedAt = DateTime.now();
+          await s.save();
+          return;
+        }
+        await Future.delayed(Duration(milliseconds: 600 * (attempt + 1)));
+      }
+    } catch (_) {
+      // Ignore network/update errors; cached data is already available
     }
   }
 
@@ -637,6 +691,36 @@ class FDAChecker {
       reasons.add('Registration number on pack differs from FDA record');
     }
 
+    // Note: We intentionally ignore dosage strength mismatches for status.
+    // The displayed strength is fetched directly from the FDA CSV.
+
+    // Dosage form mismatch (tablet/capsule/syrup/cream/etc.)
+    final normForm = _normalizeText(product['dosage_form'] ?? '');
+    final rawNorm = _normalizeText(raw);
+    final formCues = <String>['tablet','capsule','syrup','cream','ointment','solution','suspension','injection'];
+    final cueInPack = formCues.firstWhere(
+      (c) => rawNorm.contains(c),
+      orElse: () => '',
+    );
+    if (cueInPack.isNotEmpty && !normForm.contains(cueInPack)) {
+      if (status == 'VERIFIED') status = 'ALERT';
+      reasons.add('Dosage form on pack appears "$cueInPack" but FDA record differs');
+    }
+
+    // Manufacturer/Distributor cue mismatch (soft check)
+    final normMfg = _normalizeText(product['manufacturer'] ?? '');
+    final normDist = _normalizeText(product['distributor'] ?? '');
+    final hasMfgCue = rawNorm.contains('manufactured by') || rawNorm.contains('manufacturer');
+    final hasDistCue = rawNorm.contains('distributed by') || rawNorm.contains('distributor');
+    if ((hasMfgCue || hasDistCue) &&
+        normMfg.isNotEmpty && normDist.isNotEmpty &&
+        !rawNorm.contains(normMfg) && !rawNorm.contains(normDist)) {
+      // Do not escalate if already EXPIRED; otherwise add soft warning or alert in strict mode
+      final strict = SettingsService.instance.strictMatching;
+      if (status == 'VERIFIED' && strict) status = 'ALERT';
+      reasons.add('Manufacturer/distributor on pack seems different from FDA record');
+    }
+
     return (status: status, reasons: reasons);
   }
 
@@ -680,7 +764,7 @@ _ParsedFdaData _parseAndIndexCsv(String rawData) {
   String normalizeReg(String input) => input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
   for (final row in norm.skip(1)) {
     if (row.length < 2) continue;
-    final reg = (row[1] ?? '').toString();
+    final reg = row[1].toString();
     if (reg.isEmpty) continue;
     final n = normalizeReg(reg);
     if (n.isEmpty) continue;

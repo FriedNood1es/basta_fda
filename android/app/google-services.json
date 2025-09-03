@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "549165610921",
+    "project_id": "bastafda",
+    "storage_bucket": "bastafda.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:549165610921:android:a7fdcd03358c39065a76b8",
+        "android_client_info": {
+          "package_name": "com.example.basta_fda"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCHv23DHKaZhdMz4bdpuqQ-P0inb1iuQ2s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -6,16 +6,21 @@ import 'screens/welcome_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/scanner_screen.dart';
 import 'theme/app_theme.dart';
+import 'services/firebase_bootstrap.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Best-effort Firebase init (safe no-op if not configured)
+  await tryInitFirebase();
+
   // Initialize FDA Checker and load CSV
   final fdaChecker = FDAChecker();
-  // Kick off background loading; UI will react when ready
-  // (Scanner disables Confirm until data is loaded)
+  // Kick off cache-first load and freshness check; UI disables actions until ready
   // ignore: discarded_futures
-  fdaChecker.loadCSV();
+  fdaChecker.ensureLoadedAndFresh();
 
   runApp(BastaFDAApp(fdaChecker: fdaChecker));
 }
@@ -36,6 +41,42 @@ class BastaFDAApp extends StatelessWidget {
   }
 }
 
+class _AuthRouter extends StatelessWidget {
+  final List<CameraDescription> cameras;
+  final FDAChecker fdaChecker;
+  const _AuthRouter({required this.cameras, required this.fdaChecker});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = SettingsService.instance;
+    // Guest mode short-circuit
+    if (s.guestMode) {
+      return ScannerScreen(cameras: cameras, fdaChecker: fdaChecker);
+    }
+    // If Firebase isn't initialized, fall back to Settings flags
+    if (Firebase.apps.isEmpty) {
+      final loggedIn = s.isLoggedIn;
+      return loggedIn
+          ? ScannerScreen(cameras: cameras, fdaChecker: fdaChecker)
+          : LoginScreen(cameras: cameras, fdaChecker: fdaChecker);
+    }
+
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
+        final user = snap.data;
+        if (user != null) {
+          return ScannerScreen(cameras: cameras, fdaChecker: fdaChecker);
+        }
+        return LoginScreen(cameras: cameras, fdaChecker: fdaChecker);
+      },
+    );
+  }
+}
+
 class _StartRouter extends StatefulWidget {
   final FDAChecker fdaChecker;
   const _StartRouter({required this.fdaChecker});
@@ -52,7 +93,6 @@ class _StartRouterState extends State<_StartRouter> {
     super.initState();
     _route();
   }
-
   Future<void> _route() async {
     if (_routing) return;
     _routing = true;
@@ -62,17 +102,21 @@ class _StartRouterState extends State<_StartRouter> {
       if (!mounted) return;
 
       final s = SettingsService.instance;
-      Widget target;
       if (!s.hasSeenWelcome) {
-        target = WelcomeScreen(fdaChecker: widget.fdaChecker);
-      } else if (s.isLoggedIn || s.guestMode) {
-        target = ScannerScreen(cameras: cameras, fdaChecker: widget.fdaChecker);
-      } else {
-        target = LoginScreen(cameras: cameras, fdaChecker: widget.fdaChecker);
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => WelcomeScreen(fdaChecker: widget.fdaChecker)),
+        );
+        return;
       }
 
+      // Route via Firebase Auth state when available. Guest mode overrides and
+      // goes straight to Scanner for offline-first behavior.
+      Widget gate = _AuthRouter(
+        cameras: cameras,
+        fdaChecker: widget.fdaChecker,
+      );
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => target),
+        MaterialPageRoute(builder: (_) => gate),
       );
     } catch (_) {
       // If anything fails, fall back to Welcome

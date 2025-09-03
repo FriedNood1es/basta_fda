@@ -31,7 +31,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 ? null
                 : () async {
                     final path = await HistoryService.instance.export();
-                    if (!mounted) return;
+                    if (!context.mounted) return;
                     if (path != null) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text('Exported to: $path')),
@@ -101,4 +101,3 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
   }
 }
-

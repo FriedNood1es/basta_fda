@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class ScanResultScreen extends StatelessWidget {
   final Map<String, String> productInfo;
@@ -55,7 +57,7 @@ class ScanResultScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: primary.withOpacity(0.07),
+                color: primary.withValues(alpha: 0.07),
                 borderRadius: BorderRadius.circular(16),
               ),
               child: Row(
@@ -63,7 +65,7 @@ class ScanResultScreen extends StatelessWidget {
                 children: [
                   CircleAvatar(
                     radius: 28,
-                    backgroundColor: primary.withOpacity(0.1),
+                    backgroundColor: primary.withValues(alpha: 0.1),
                     child: Image.asset('assets/logo.png', height: 32),
                   ),
                   const SizedBox(width: 16),
@@ -237,10 +239,29 @@ class ScanResultScreen extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Report submitted')),
-                  );
+                onPressed: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  try {
+                    if (Firebase.apps.isEmpty) {
+                      await Firebase.initializeApp();
+                    }
+                    await FirebaseFirestore.instance.collection('reports').add({
+                      'createdAt': FieldValue.serverTimestamp(),
+                      'status': status,
+                      'reg_no': productInfo['reg_no'] ?? '',
+                      'brand_name': productInfo['brand_name'] ?? '',
+                      'generic_name': productInfo['generic_name'] ?? '',
+                      'dosage_form': productInfo['dosage_form'] ?? '',
+                      'dosage_strength': productInfo['dosage_strength'] ?? '',
+                      'country': productInfo['country'] ?? '',
+                      'manufacturer': productInfo['manufacturer'] ?? '',
+                      'distributor': productInfo['distributor'] ?? '',
+                      'reason': productInfo['verification_reasons'] ?? productInfo['match_reason'] ?? '',
+                    });
+                    messenger.showSnackBar(const SnackBar(content: Text('Report submitted')));
+                  } catch (e) {
+                    messenger.showSnackBar(const SnackBar(content: Text('Could not submit report. Configure Firebase.')));
+                  }
                 },
                 icon: const Icon(Icons.report_gmailerrorred_rounded),
                 style: ElevatedButton.styleFrom(
@@ -269,9 +290,9 @@ class _StatusChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.15),
+        color: color.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withOpacity(0.35)),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
       child: Text(
         label.toUpperCase(),

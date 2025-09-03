@@ -3,11 +3,21 @@ import 'package:camera/camera.dart';
 import 'package:basta_fda/services/fda_checker.dart';
 import 'package:basta_fda/screens/scanner_screen.dart';
 import 'package:basta_fda/services/settings_service.dart';
+import 'package:basta_fda/services/auth_service.dart';
 
-class LoginScreen extends StatelessWidget {
+class LoginScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
   final FDAChecker fdaChecker;
   const LoginScreen({super.key, required this.cameras, required this.fdaChecker});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  bool _busy = false;
 
   @override
   Widget build(BuildContext context) {
@@ -20,7 +30,7 @@ class LoginScreen extends StatelessWidget {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              theme.colorScheme.primary.withOpacity(0.03),
+              theme.colorScheme.primary.withValues(alpha: 0.03),
               theme.colorScheme.surface,
             ],
           ),
@@ -44,11 +54,12 @@ class LoginScreen extends StatelessWidget {
                           const SizedBox(height: 8),
                           Text('Welcome back', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
                           const SizedBox(height: 4),
-                          Text('Sign in to continue', style: theme.textTheme.bodyMedium?.copyWith(color: theme.hintColor)),
+                          Text('Your first defense against fake medicines.', style: theme.textTheme.bodyMedium?.copyWith(color: theme.hintColor)),
                         ],
                       ),
                       const SizedBox(height: 16),
                       TextField(
+                        controller: _email,
                         decoration: InputDecoration(
                           labelText: 'Email',
                           prefixIcon: const Icon(Icons.mail_outline_rounded),
@@ -58,6 +69,7 @@ class LoginScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 16),
                       TextField(
+                        controller: _password,
                         decoration: InputDecoration(
                           labelText: 'Password',
                           prefixIcon: const Icon(Icons.lock_outline_rounded),
@@ -69,40 +81,66 @@ class LoginScreen extends StatelessWidget {
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
-                          onPressed: () async {
+                          onPressed: _busy ? null : () async {
+                            setState(() => _busy = true);
+                            final (ok, err) = await AuthService.instance
+                                .signInWithEmailPassword(_email.text.trim(), _password.text);
+                            setState(() => _busy = false);
+                            if (!mounted) return;
+                            if (!ok) {
+                              ScaffoldMessenger.of(context)
+                                  .showSnackBar(SnackBar(content: Text(err ?? 'Login failed')));
+                              return;
+                            }
                             final s = SettingsService.instance;
                             await s.load();
-                            s.isLoggedIn = true; // mock email login
+                            s.isLoggedIn = true;
                             s.guestMode = false;
                             s.authProvider = 'email';
                             await s.save();
-                            if (!context.mounted) return;
+                            // Give the user immediate success feedback
+                            ScaffoldMessenger.of(context)
+                                .showSnackBar(const SnackBar(content: Text('Logged in successfully')));
+                            await Future.delayed(const Duration(milliseconds: 500));
                             Navigator.pushReplacement(
                               context,
                               MaterialPageRoute(
-                                builder: (_) => ScannerScreen(cameras: cameras, fdaChecker: fdaChecker),
+                                builder: (_) => ScannerScreen(cameras: widget.cameras, fdaChecker: widget.fdaChecker),
                               ),
                             );
                           },
-                          child: const Text('Login'),
+                          child: _busy
+                              ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Text('Login'),
                         ),
                       ),
                       const SizedBox(height: 8),
                       SizedBox(
                         width: double.infinity,
                         child: OutlinedButton.icon(
-                          onPressed: () async {
-                            // Placeholder for Google Sign-In integration
+                          onPressed: _busy ? null : () async {
+                            setState(() => _busy = true);
+                            final (ok, err) = await AuthService.instance.signInWithGoogle();
+                            setState(() => _busy = false);
+                            if (!mounted) return;
+                            if (!ok) {
+                              ScaffoldMessenger.of(context)
+                                  .showSnackBar(SnackBar(content: Text(err ?? 'Google sign-in failed')));
+                              return;
+                            }
                             final s = SettingsService.instance;
                             await s.load();
                             s.isLoggedIn = true;
                             s.guestMode = false;
                             s.authProvider = 'google';
                             await s.save();
-                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context)
+                                .showSnackBar(const SnackBar(content: Text('Signed in with Google')));
+                            await Future.delayed(const Duration(milliseconds: 500));
                             Navigator.pushReplacement(
                               context,
-                              MaterialPageRoute(builder: (_) => ScannerScreen(cameras: cameras, fdaChecker: fdaChecker)),
+                              MaterialPageRoute(
+                                  builder: (_) => ScannerScreen(cameras: widget.cameras, fdaChecker: widget.fdaChecker)),
                             );
                           },
                           icon: const Icon(Icons.g_mobiledata_rounded, size: 28),
@@ -117,7 +155,7 @@ class LoginScreen extends StatelessWidget {
                             onPressed: () {
                               Navigator.push(
                                 context,
-                                MaterialPageRoute(builder: (_) => RegisterScreen(cameras: cameras, fdaChecker: fdaChecker)),
+                                MaterialPageRoute(builder: (_) => RegisterScreen(cameras: widget.cameras, fdaChecker: widget.fdaChecker)),
                               );
                             },
                             child: const Text('Create account'),
@@ -133,10 +171,13 @@ class LoginScreen extends StatelessWidget {
                               s.isLoggedIn = false;
                               await s.save();
                               if (!context.mounted) return;
+                              ScaffoldMessenger.of(context)
+                                  .showSnackBar(const SnackBar(content: Text('Continuing as guest')));
+                              await Future.delayed(const Duration(milliseconds: 450));
                               Navigator.pushReplacement(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => ScannerScreen(cameras: cameras, fdaChecker: fdaChecker),
+                                  builder: (_) => ScannerScreen(cameras: widget.cameras, fdaChecker: widget.fdaChecker),
                                 ),
                               );
                             },
@@ -156,10 +197,20 @@ class LoginScreen extends StatelessWidget {
   }
 }
 
-class RegisterScreen extends StatelessWidget {
+class RegisterScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
   final FDAChecker fdaChecker;
   const RegisterScreen({super.key, required this.cameras, required this.fdaChecker});
+
+  @override
+  State<RegisterScreen> createState() => _RegisterScreenState();
+}
+
+class _RegisterScreenState extends State<RegisterScreen> {
+  final _name = TextEditingController();
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  bool _busy = false;
 
   @override
   Widget build(BuildContext context) {
@@ -183,10 +234,13 @@ class RegisterScreen extends StatelessWidget {
                         Image.asset('assets/logo.png', height: 64),
                         const SizedBox(height: 8),
                         Text('Join bastaFDA', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 4),
+                        Text('Your first defense against fake medicines.', style: theme.textTheme.bodyMedium?.copyWith(color: theme.hintColor)),
                       ],
                     ),
                     const SizedBox(height: 16),
                     TextField(
+                      controller: _name,
                       decoration: InputDecoration(
                         labelText: 'Name',
                         prefixIcon: const Icon(Icons.person_outline_rounded),
@@ -195,6 +249,7 @@ class RegisterScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 16),
                     TextField(
+                      controller: _email,
                       decoration: InputDecoration(
                         labelText: 'Email',
                         prefixIcon: const Icon(Icons.mail_outline_rounded),
@@ -204,6 +259,7 @@ class RegisterScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 16),
                     TextField(
+                      controller: _password,
                       decoration: InputDecoration(
                         labelText: 'Password',
                         prefixIcon: const Icon(Icons.lock_outline_rounded),
@@ -215,38 +271,65 @@ class RegisterScreen extends StatelessWidget {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: () async {
+                        onPressed: _busy ? null : () async {
+                          setState(() => _busy = true);
+                          final (ok, err) = await AuthService.instance.registerWithEmailPassword(
+                            _email.text.trim(),
+                            _password.text,
+                            displayName: _name.text.trim(),
+                          );
+                          setState(() => _busy = false);
+                          if (!mounted) return;
+                          if (!ok) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err ?? 'Registration failed')));
+                            return;
+                          }
                           final s = SettingsService.instance;
                           await s.load();
                           s.isLoggedIn = true;
                           s.guestMode = false;
                           s.authProvider = 'email';
                           await s.save();
-                          if (!context.mounted) return;
+                          // Show success before navigating
+                          ScaffoldMessenger.of(context)
+                              .showSnackBar(const SnackBar(content: Text('Account created')));
+                          await Future.delayed(const Duration(milliseconds: 600));
                           Navigator.pushAndRemoveUntil(
                             context,
-                            MaterialPageRoute(builder: (_) => ScannerScreen(cameras: cameras, fdaChecker: fdaChecker)),
+                            MaterialPageRoute(builder: (_) => ScannerScreen(cameras: widget.cameras, fdaChecker: widget.fdaChecker)),
                             (route) => false,
                           );
                         },
-                        child: const Text('Create account'),
+                        child: _busy
+                            ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Text('Create account'),
                       ),
                     ),
                     const SizedBox(height: 8),
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
-                        onPressed: () async {
+                        onPressed: _busy ? null : () async {
+                          setState(() => _busy = true);
+                          final (ok, err) = await AuthService.instance.signInWithGoogle();
+                          setState(() => _busy = false);
+                          if (!mounted) return;
+                          if (!ok) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err ?? 'Google sign-in failed')));
+                            return;
+                          }
                           final s = SettingsService.instance;
                           await s.load();
                           s.isLoggedIn = true;
                           s.guestMode = false;
                           s.authProvider = 'google';
                           await s.save();
-                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context)
+                              .showSnackBar(const SnackBar(content: Text('Signed in with Google')));
+                          await Future.delayed(const Duration(milliseconds: 500));
                           Navigator.pushAndRemoveUntil(
                             context,
-                            MaterialPageRoute(builder: (_) => ScannerScreen(cameras: cameras, fdaChecker: fdaChecker)),
+                            MaterialPageRoute(builder: (_) => ScannerScreen(cameras: widget.cameras, fdaChecker: widget.fdaChecker)),
                             (route) => false,
                           );
                         },
@@ -268,4 +351,3 @@ class RegisterScreen extends StatelessWidget {
     );
   }
 }
-

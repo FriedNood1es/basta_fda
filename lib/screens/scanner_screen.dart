@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData, HapticFeedback;
@@ -10,7 +9,6 @@ import 'package:basta_fda/screens/scan_result_screen.dart';
 import 'package:basta_fda/screens/not_found_screen.dart';
 import 'package:basta_fda/screens/history_screen.dart';
 import 'package:basta_fda/screens/settings_screen.dart';
-import 'package:basta_fda/screens/login_screen.dart';
 import 'package:basta_fda/services/history_service.dart';
 import 'package:basta_fda/services/settings_service.dart';
 
@@ -27,9 +25,9 @@ class ScannerScreen extends StatefulWidget {
 class _ScannerScreenState extends State<ScannerScreen> {
   CameraController? _controller;
   bool _isInitialized = false;
-  bool _streaming = false;
+  // Removed _streaming flag (was unused)
   bool _isBusy = false;
-  bool _paused = false;
+  final bool _paused = false;
   bool _torchOn = false;
   bool _liveMode = false; // Lens-like live OCR (off by default)
   String _extractedText = "";
@@ -65,8 +63,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
         _stopStream();
       }
     });
-    // Ensure FDA data is loading; prefer cached copy when available
-    widget.fdaChecker.loadCSVIsolatePreferCache().then((_) {
+    // Ensure FDA data is loaded and reasonably fresh (uses cache first)
+    widget.fdaChecker.ensureLoadedAndFresh().then((_) {
       if (mounted) setState(() {});
     });
   }
@@ -95,7 +93,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   Future<void> _startStream() async {
     if (!mounted || _controller == null || _controller!.value.isStreamingImages) return;
-    _streaming = true;
     await _controller!.startImageStream(_onImage);
   }
 
@@ -103,7 +100,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     if (_controller != null && _controller!.value.isStreamingImages) {
       await _controller!.stopImageStream();
     }
-    _streaming = false;
   }
 
   Future<void> _onImage(CameraImage cameraImage) async {
@@ -160,7 +156,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     double minX = double.infinity, minY = double.infinity, maxX = 0, maxY = 0;
     for (final b in result.blocks) {
       final r = b.boundingBox;
-      if (r == null) continue;
       if (r.left < minX) minX = r.left;
       if (r.top < minY) minY = r.top;
       if (r.right > maxX) maxX = r.right;
@@ -177,7 +172,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final buffer = StringBuffer();
     for (final block in result.blocks) {
       final box = block.boundingBox;
-      if (box == null) continue;
       if (roi.overlaps(box) || footer.overlaps(box)) {
         buffer.writeln(block.text);
       }
@@ -253,7 +247,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final roi = Rect.fromLTWH(imgW * 0.2, imgH * 0.325, imgW * 0.6, imgH * 0.35);
     for (final block in result.blocks) {
       final box = block.boundingBox;
-      if (box == null) continue;
       if (roi.overlaps(box)) {
         final text = cleanText(block.text);
         for (final t in text.split(' ')) {
@@ -401,6 +394,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         matchedProduct['verification_reasons'] = eval.reasons.join('\n');
       }
       await HistoryService.instance.addEntry(scannedText: text, productInfo: matchedProduct, status: status);
+      if (!mounted) return;
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -412,6 +406,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       );
     } else {
       await HistoryService.instance.addEntry(scannedText: raw, productInfo: null, status: 'NOT FOUND');
+      if (!mounted) return;
       final returned = await Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => NotFoundScreen(scannedText: raw, fdaChecker: widget.fdaChecker)),
@@ -508,12 +503,12 @@ appBar: AppBar(
           Positioned.fill(
             child: IgnorePointer(
               child: CustomPaint(
-                painter: _ReticlePainter(color: Colors.white.withOpacity(0.9)),
+                painter: _ReticlePainter(color: Colors.white.withValues(alpha: 0.9)),
               ),
             ),
           ),
 
-          // Small banner to indicate FDA DB loading state
+          // Small banner to indicate FDA DB loading state or staleness
           if (!widget.fdaChecker.isLoaded)
             Positioned(
               top: 12,
@@ -521,7 +516,7 @@ appBar: AppBar(
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.45),
+                  color: Colors.black.withValues(alpha: 0.45),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Row(
@@ -533,6 +528,27 @@ appBar: AppBar(
                     ),
                     SizedBox(width: 8),
                     Text('Loading FDA data…', style: TextStyle(color: Colors.white)),
+                  ],
+                ),
+              ),
+            )
+          else if (widget.fdaChecker.isStale)
+            Positioned(
+              top: 12,
+              left: 12,
+              right: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange.withValues(alpha: 0.5)),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(Icons.info_outline_rounded, color: Colors.orange, size: 16),
+                    SizedBox(width: 8),
+                    Expanded(child: Text('FDA data may be out of date. Open Settings to update.', style: TextStyle(color: Colors.orange))),
                   ],
                 ),
               ),
@@ -576,9 +592,9 @@ appBar: AppBar(
             left: 0,
             right: 0,
             bottom: 0,
-            child: Container(
+              child: Container(
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface.withOpacity(0.92),
+                color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.92),
                 border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
                 boxShadow: const [BoxShadow(blurRadius: 12, color: Colors.black26)],
@@ -682,7 +698,7 @@ appBar: AppBar(
 
 Widget _roundIconButton({required IconData icon, required VoidCallback onTap, String? tooltip}) {
   return Material(
-    color: Colors.black.withOpacity(0.35),
+    color: Colors.black.withValues(alpha: 0.35),
     shape: const CircleBorder(),
     child: IconButton(
       icon: Icon(icon, color: Colors.white),

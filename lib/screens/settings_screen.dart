@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:basta_fda/services/settings_service.dart';
+import 'package:basta_fda/services/auth_service.dart';
 import 'package:basta_fda/services/fda_checker.dart';
 import 'package:basta_fda/screens/login_screen.dart';
+import 'package:basta_fda/screens/reports_screen.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class SettingsScreen extends StatefulWidget {
   final FDAChecker fdaChecker;
@@ -21,6 +25,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
     SettingsService.instance.load().then((_) => setState(() => _loading = false));
   }
 
+  Widget _accountSummary() {
+    final s = SettingsService.instance;
+    String title;
+    String subtitle;
+    if (s.guestMode) {
+      title = 'Guest mode';
+      subtitle = 'Not signed in';
+    } else if (Firebase.apps.isNotEmpty && FirebaseAuth.instance.currentUser != null) {
+      final u = FirebaseAuth.instance.currentUser!;
+      title = (u.displayName?.isNotEmpty ?? false) ? u.displayName! : (u.email ?? 'Signed in');
+      subtitle = (u.email ?? '').isNotEmpty ? (u.email!) : 'Google/Firebase account';
+    } else if (s.isLoggedIn) {
+      title = (s.displayName?.isNotEmpty ?? false) ? s.displayName! : (s.userEmail ?? 'Signed in');
+      subtitle = (s.userEmail ?? '').isNotEmpty ? s.userEmail! : 'Account active';
+    } else {
+      title = 'Not signed in';
+      subtitle = 'Tap Logout to return to Login';
+    }
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Theme.of(context).dividerColor),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 18,
+            child: Text((title.isNotEmpty ? title[0] : '?').toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(subtitle, style: TextStyle(color: Theme.of(context).hintColor)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = SettingsService.instance;
@@ -30,6 +83,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               children: [
+                _accountSummary(),
                 if (s.guestMode)
                   Container(
                     margin: const EdgeInsets.fromLTRB(12, 12, 12, 6),
@@ -118,15 +172,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     setState(() {});
                   },
                 ),
+                if ((SettingsService.instance.fdaUpdateUrl?.isNotEmpty ?? false))
+                  ListTile(
+                    leading: const Icon(Icons.cloud_sync_rounded),
+                    title: const Text('Check for updates now'),
+                    subtitle: const Text('Uses the saved URL and updates if data is stale'),
+                    onTap: () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      messenger.showSnackBar(const SnackBar(content: Text('Checking for updates…')));
+                      await widget.fdaChecker.ensureLoadedAndFresh();
+                      if (!mounted) return;
+                      messenger.showSnackBar(const SnackBar(content: Text('Update check complete')));
+                      setState(() {});
+                    },
+                  ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.list_alt_rounded),
+                  title: const Text('View submitted reports (admin)'),
+                  subtitle: const Text('Requires Firebase configuration'),
+                  onTap: () {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const ReportsScreen()));
+                  },
+                ),
                 const Divider(),
                 ListTile(
                   leading: const Icon(Icons.sync_rounded),
                   title: const Text('Refresh FDA database (cache/asset)'),
-                  subtitle: Text(
-                    widget.fdaChecker.isLoaded
-                        ? 'Loaded rows: ${widget.fdaChecker.rowCount}${widget.fdaChecker.loadedAt != null ? ' • ${widget.fdaChecker.loadedAt}' : ''}'
-                        : 'Not loaded yet',
-                  ),
+                  subtitle: Builder(builder: (context) {
+                    if (!widget.fdaChecker.isLoaded) return const Text('Not loaded yet');
+                    final s = SettingsService.instance;
+                    final last = s.fdaLastUpdatedAt ?? widget.fdaChecker.loadedAt;
+                    final stale = widget.fdaChecker.isStale;
+                    final lastText = last != null ? last.toString() : 'unknown';
+                    final staleText = stale ? ' • STALE' : '';
+                    return Text('Loaded rows: ${widget.fdaChecker.rowCount} • Last updated: $lastText$staleText');
+                  }),
                   onTap: () async {
                     final messenger = ScaffoldMessenger.of(context);
                     await widget.fdaChecker.loadCSVIsolatePreferCache();
@@ -157,7 +238,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       await s.load();
                       s.isLoggedIn = false;
                       s.guestMode = false;
+                      s.userEmail = null;
+                      s.displayName = null;
                       await s.save();
+                      await AuthService.instance.signOut();
                       try {
                         final cameras = await availableCameras();
                         if (!context.mounted) return;
@@ -173,10 +257,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 const Divider(),
-                const AboutListTile(
+                AboutListTile(
                   applicationName: 'bastaFDA',
                   applicationVersion: '1.0.0',
                   applicationLegalese: 'Ac 2025',
+                  applicationIcon: Image.asset('assets/logo.png', height: 40),
+                  aboutBoxChildren: const [
+                    SizedBox(height: 12),
+                    Text(
+                      'Your first defense against fake medicines.',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'bastaFDA: Counterfeit Product Scanner helps you verify if medicines and supplements are FDA-approved in seconds. Just scan the packaging with your phone, and the app uses OCR to check product details against the FDA database. Get instant results — Registered, Not Found, or Flagged — and report suspicious products to stay safe and informed.',
+                    ),
+                  ],
                 ),
               ],
             ),
