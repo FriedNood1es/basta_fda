@@ -21,5 +21,6 @@ tasks.register<Delete>("clean") {
 }
 plugins {
     // Google Services plugin for parsing google-services.json
-    id("com.google.gms.google-services") version "4.4.3" apply false
+    // Version is managed in settings.gradle.kts (FlutterFire injected)
+    // to avoid classpath conflicts. Do not redeclare here.
 }

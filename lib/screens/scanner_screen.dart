@@ -11,6 +11,7 @@ import 'package:basta_fda/screens/history_screen.dart';
 import 'package:basta_fda/screens/settings_screen.dart';
 import 'package:basta_fda/services/history_service.dart';
 import 'package:basta_fda/services/settings_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ScannerScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
@@ -62,6 +63,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
       } else {
         _stopStream();
       }
+      // Ensure history is scoped to the current session (guest vs user)
+      try {
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          // ignore: discarded_futures
+          HistoryService.instance.switchProfileKey(user.uid);
+        } else if (SettingsService.instance.guestMode) {
+          // ignore: discarded_futures
+          HistoryService.instance.switchProfileKey('guest');
+        }
+      } catch (_) {}
     });
     // Ensure FDA data is loaded and reasonably fresh (uses cache first)
     widget.fdaChecker.ensureLoadedAndFresh().then((_) {

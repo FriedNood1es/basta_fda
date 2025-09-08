@@ -12,7 +12,20 @@
           "package_name": "com.example.basta_fda"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "549165610921-ln50le42nebgkje3rm9p10qnn6vdmrub.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.basta_fda",
+            "certificate_hash": "74f1f12e8c5072e652901cc29ba6e13bf34bb747"
+          }
+        },
+        {
+          "client_id": "549165610921-apfu5uds2d1q0l9a1flrbi4m3j1tag2n.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyCHv23DHKaZhdMz4bdpuqQ-P0inb1iuQ2s"
@@ -20,7 +33,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "549165610921-apfu5uds2d1q0l9a1flrbi4m3j1tag2n.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "549165610921-d5977v3u8vbgk59k0pi73157u9u1bmep.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.bastafda"
+              }
+            }
+          ]
         }
       }
     }

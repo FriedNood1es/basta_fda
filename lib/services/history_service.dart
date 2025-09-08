@@ -36,18 +36,52 @@ class HistoryService {
 
   final List<HistoryEntry> _entries = [];
   bool _loaded = false;
+  String _profileKey = 'guest';
+
+  String get currentProfile => _profileKey;
+
+  // Sanitize profile key for filename safety (letters, numbers, _ and -)
+  String _safe(String key) {
+    final lower = key.toLowerCase();
+    final replaced = lower.replaceAll(RegExp(r'[^a-z0-9_-]'), '_');
+    final squashed = replaced.replaceAll(RegExp(r'_+'), '_');
+    return squashed.trim();
+  }
 
   List<HistoryEntry> get entries => List.unmodifiable(_entries.reversed);
 
   Future<File> _file() async {
     final dir = await getApplicationDocumentsDirectory();
-    return File('${dir.path}/history.json');
+    final key = _safe(_profileKey).isEmpty ? 'guest' : _safe(_profileKey);
+    return File('${dir.path}/history_$key.json');
   }
 
   Future<void> load() async {
     if (_loaded) return;
     try {
       final f = await _file();
+      // Simple migration: if switching to guest and legacy file exists, import it
+      if (!(await f.exists()) && _profileKey == 'guest') {
+        final dir = await getApplicationDocumentsDirectory();
+        final legacy = File('${dir.path}/history.json');
+        if (await legacy.exists()) {
+          try {
+            final legacyRaw = await legacy.readAsString();
+            final list = (jsonDecode(legacyRaw) as List)
+                .cast<Map>()
+                .map((m) => HistoryEntry.fromJson(m.cast<String, dynamic>()))
+                .toList();
+            _entries
+              ..clear()
+              ..addAll(list);
+            await _persist(); // save into new per-profile file
+            _loaded = true;
+            return;
+          } catch (_) {
+            // ignore corrupt legacy file
+          }
+        }
+      }
       if (await f.exists()) {
         final raw = await f.readAsString();
         final list = (jsonDecode(raw) as List).cast<Map>().map((m) => HistoryEntry.fromJson(m.cast<String, dynamic>())).toList();
@@ -70,6 +104,17 @@ class HistoryService {
     } catch (_) {
       // ignore
     }
+  }
+
+  /// Switch the active history profile (e.g., 'guest' or a Firebase UID).
+  /// This clears in-memory entries and loads the target profile file.
+  Future<void> switchProfileKey(String key) async {
+    final k = _safe(key.isEmpty ? 'guest' : key);
+    if (k == _profileKey && _loaded) return;
+    _profileKey = k.isEmpty ? 'guest' : k;
+    _loaded = false;
+    _entries.clear();
+    await load();
   }
 
   Future<void> addEntry({required String scannedText, required Map<String, String>? productInfo, required String status}) async {
@@ -103,3 +148,6 @@ class HistoryService {
     }
   }
 }
+
+
+

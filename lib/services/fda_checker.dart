@@ -68,6 +68,28 @@ class FDAChecker {
     return input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 
+  // Tokens useful for fuzzy name comparisons (manufacturer/distributor)
+  static const Set<String> _nameStopwords = {
+    'inc', 'incorporated', 'corp', 'corporation', 'company', 'co', 'ltd', 'limited',
+    'laboratories', 'laboratory', 'pharma', 'pharmaceutical', 'pharmaceuticals',
+    'industries', 'industry', 'mfg', 'manufacturing', 'manufacturers', 'manuf', 'the'
+  };
+
+  List<String> _nameTokens(String input) {
+    final norm = _normalizeText(input);
+    return norm
+        .split(' ')
+        .where((t) => t.isNotEmpty && t.length >= 3 && !_nameStopwords.contains(t))
+        .toList();
+  }
+
+  int _tokenOverlapCount(String a, String b) {
+    final aSet = _nameTokens(a).toSet();
+    final bSet = _nameTokens(b).toSet();
+    if (aSet.isEmpty || bSet.isEmpty) return 0;
+    return aSet.intersection(bSet).length;
+  }
+
   /// Try to extract registration number candidates from scanned text.
   /// Looks for patterns like "Reg. No.: DRP-12345" or explicit DRP-like codes.
   List<String> _extractRegCandidates(String raw) {
@@ -247,10 +269,12 @@ class FDAChecker {
       bool bestMgHit = false;
       bool bestFormCue = false;
 
-      // Extract mg strengths from the scan (e.g., 5mg, 10 mg)
-      final mgMatches = RegExp(r"(\d{1,3})\s*mg").allMatches(normalizedScan).map((m) => m.group(1)!).toSet();
+    // Extract mg strengths from the scan (supports decimals e.g., 2.5 mg)
+      final mgMatches = RegExp(r"(\d+(?:\.\d+)?)\s*mg").
+          allMatches(normalizedScan).map((m) => m.group(1)!).toSet();
       final hasTablet = normalizedScan.contains('tablet');
       final hasCapsule = normalizedScan.contains('capsule');
+      final hasSyrup = normalizedScan.contains('syrup');
 
       for (var row in _data.skip(1)) {
         if (row.length < 17) continue;
@@ -290,6 +314,7 @@ class FDAChecker {
         bool formCue = false;
         if (hasTablet && normForm.contains('tablet')) { s += 0.6; formCue = true; }
         if (hasCapsule && normForm.contains('capsule')) { s += 0.6; formCue = true; }
+        if (hasSyrup && normForm.contains('syrup')) { s += 0.6; formCue = true; }
 
         // Distributor token overlap (e.g., tgp)
         final distTokens = normDistributor.split(' ').where((t) => t.length >= 3).toSet();
@@ -476,12 +501,13 @@ class FDAChecker {
       final genericTokens = normGeneric.split(' ').where((t) => t.isNotEmpty).toSet();
       final brandHits = brandTokens.intersection(scanTokenSet).length;
       final genericHits = genericTokens.intersection(scanTokenSet).length;
-      final mgHit = RegExp(r"(\d{1,3})\s*mg").allMatches(normalizedScan).any((m) {
+      final mgHit = RegExp(r"(\d+(?:\.\d+)?)\s*mg").allMatches(normalizedScan).any((m) {
         final n = m.group(1)!;
         return normStrength.contains('$n mg') || normStrength.contains('${n}mg');
       });
       final formCue = (normalizedScan.contains('tablet') && normForm.contains('tablet')) ||
-          (normalizedScan.contains('capsule') && normForm.contains('capsule'));
+          (normalizedScan.contains('capsule') && normForm.contains('capsule')) ||
+          (normalizedScan.contains('syrup') && normForm.contains('syrup'));
       final hasCue = _hasMedicineCue(normalizedScan) || mgHit || formCue;
       final enoughEvidence = (brandHits >= 1 && genericHits >= 1) ||
           (brandHits >= 1 && (mgHit || formCue));
@@ -512,9 +538,10 @@ class FDAChecker {
     final List<({double score, List<dynamic> row})> candidates = [];
 
     // Extract quick cues
-    final mgMatches = RegExp(r"(\d{1,3})\s*mg").allMatches(normalizedScan).map((m) => m.group(1)!).toSet();
+    final mgMatches = RegExp(r"(\d+(?:\.\d+)?)\s*mg").allMatches(normalizedScan).map((m) => m.group(1)!).toSet();
     final hasTablet = normalizedScan.contains('tablet');
     final hasCapsule = normalizedScan.contains('capsule');
+    final hasSyrup = normalizedScan.contains('syrup');
     // Reg No candidates
     final regCandidates = _extractRegCandidates(scannedText).map(_normalizeReg).toSet();
 
@@ -555,6 +582,7 @@ class FDAChecker {
       // Form cue
       if (hasTablet && normForm.contains('tablet')) s += 0.4;
       if (hasCapsule && normForm.contains('capsule')) s += 0.4;
+      if (hasSyrup && normForm.contains('syrup')) s += 0.4;
 
       // Distributor cue
       final distTokens = normDistributor.split(' ').where((t) => t.isNotEmpty).toSet();
@@ -707,18 +735,24 @@ class FDAChecker {
       reasons.add('Dosage form on pack appears "$cueInPack" but FDA record differs');
     }
 
-    // Manufacturer/Distributor cue mismatch (soft check)
+    // Manufacturer/Distributor cue mismatch (fuzzy check)
     final normMfg = _normalizeText(product['manufacturer'] ?? '');
     final normDist = _normalizeText(product['distributor'] ?? '');
     final hasMfgCue = rawNorm.contains('manufactured by') || rawNorm.contains('manufacturer');
     final hasDistCue = rawNorm.contains('distributed by') || rawNorm.contains('distributor');
-    if ((hasMfgCue || hasDistCue) &&
-        normMfg.isNotEmpty && normDist.isNotEmpty &&
-        !rawNorm.contains(normMfg) && !rawNorm.contains(normDist)) {
-      // Do not escalate if already EXPIRED; otherwise add soft warning or alert in strict mode
-      final strict = SettingsService.instance.strictMatching;
-      if (status == 'VERIFIED' && strict) status = 'ALERT';
-      reasons.add('Manufacturer/distributor on pack seems different from FDA record');
+    if ((hasMfgCue || hasDistCue) && (normMfg.isNotEmpty || normDist.isNotEmpty)) {
+      final mfgOverlap = normMfg.isNotEmpty ? _tokenOverlapCount(raw, normMfg) : 0;
+      final distOverlap = normDist.isNotEmpty ? _tokenOverlapCount(raw, normDist) : 0;
+
+      final mfgLooksDifferent = normMfg.isNotEmpty && mfgOverlap == 0;
+      final distLooksDifferent = normDist.isNotEmpty && distOverlap == 0;
+
+      // Only escalate if BOTH appear different; otherwise keep as informational note
+      if (mfgLooksDifferent && distLooksDifferent) {
+        final strict = SettingsService.instance.strictMatching;
+        if (status == 'VERIFIED' && strict) status = 'ALERT';
+        reasons.add('Manufacturer/distributor on pack seems different from FDA record');
+      }
     }
 
     return (status: status, reasons: reasons);

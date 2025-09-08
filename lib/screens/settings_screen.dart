@@ -7,6 +7,7 @@ import 'package:basta_fda/screens/login_screen.dart';
 import 'package:basta_fda/screens/reports_screen.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:basta_fda/services/history_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   final FDAChecker fdaChecker;
@@ -143,12 +144,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     final controller = TextEditingController(text: '');
                     final url = await showDialog<String?>(
                       context: context,
-                      builder: (_) => AlertDialog(
+                      builder: (dialogCtx) => AlertDialog(
                         title: const Text('Enter CSV URL'),
-                        content: TextField(
-                          controller: controller,
-                          decoration: const InputDecoration(hintText: 'https://example.com/ALL_DrugProducts.csv'),
-                          autofocus: true,
+                        content: SingleChildScrollView(
+                          padding: EdgeInsets.only(
+                            bottom: MediaQuery.of(dialogCtx).viewInsets.bottom,
+                          ),
+                          child: TextField(
+                            controller: controller,
+                            decoration: const InputDecoration(
+                              hintText: 'https://example.com/ALL_DrugProducts.csv',
+                            ),
+                            autofocus: true,
+                            keyboardType: TextInputType.url,
+                            textInputAction: TextInputAction.done,
+                          ),
                         ),
                         actions: [
                           TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancel')),
@@ -242,6 +252,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       s.displayName = null;
                       await s.save();
                       await AuthService.instance.signOut();
+                      // Switch history to guest profile on logout
+                      await HistoryService.instance.switchProfileKey('guest');
                       try {
                         final cameras = await availableCameras();
                         if (!context.mounted) return;
