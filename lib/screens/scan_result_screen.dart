@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:basta_fda/services/settings_service.dart';
 
 class ScanResultScreen extends StatelessWidget {
   final Map<String, String> productInfo;
@@ -240,28 +243,14 @@ class ScanResultScreen extends StatelessWidget {
               width: double.infinity,
               child: ElevatedButton.icon(
                 onPressed: () async {
-                  final messenger = ScaffoldMessenger.of(context);
-                  try {
-                    if (Firebase.apps.isEmpty) {
-                      await Firebase.initializeApp();
-                    }
-                    await FirebaseFirestore.instance.collection('reports').add({
-                      'createdAt': FieldValue.serverTimestamp(),
-                      'status': status,
-                      'reg_no': productInfo['reg_no'] ?? '',
-                      'brand_name': productInfo['brand_name'] ?? '',
-                      'generic_name': productInfo['generic_name'] ?? '',
-                      'dosage_form': productInfo['dosage_form'] ?? '',
-                      'dosage_strength': productInfo['dosage_strength'] ?? '',
-                      'country': productInfo['country'] ?? '',
-                      'manufacturer': productInfo['manufacturer'] ?? '',
-                      'distributor': productInfo['distributor'] ?? '',
-                      'reason': productInfo['verification_reasons'] ?? productInfo['match_reason'] ?? '',
-                    });
-                    messenger.showSnackBar(const SnackBar(content: Text('Report submitted')));
-                  } catch (e) {
-                    messenger.showSnackBar(const SnackBar(content: Text('Could not submit report. Configure Firebase.')));
-                  }
+                  await showModalBottomSheet(
+                    context: context,
+                    isScrollControlled: true,
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                    ),
+                    builder: (ctx) => _ReportProductSheet(productInfo: productInfo, status: status),
+                  );
                 },
                 icon: const Icon(Icons.report_gmailerrorred_rounded),
                 style: ElevatedButton.styleFrom(
@@ -333,6 +322,198 @@ class _DetailRow extends StatelessWidget {
         ),
         if (showDivider) const Divider(height: 0),
       ],
+    );
+  }
+}
+
+class _ReportProductSheet extends StatefulWidget {
+  final Map<String, String> productInfo;
+  final String status;
+  const _ReportProductSheet({required this.productInfo, required this.status});
+
+  @override
+  State<_ReportProductSheet> createState() => _ReportProductSheetState();
+}
+
+class _ReportProductSheetState extends State<_ReportProductSheet> {
+  final _formKey = GlobalKey<FormState>();
+  final _descCtrl = TextEditingController();
+  final _contactCtrl = TextEditingController();
+  String _category = 'Counterfeit';
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    () async {
+      await SettingsService.instance.load();
+      final savedCat = SettingsService.instance.lastReportCategory;
+      final savedContact = SettingsService.instance.lastReportContact;
+      String initial = savedCat?.isNotEmpty == true ? savedCat! : _category;
+      final s = widget.status.toUpperCase();
+      if (savedCat == null || savedCat.isEmpty) {
+        if (s == 'EXPIRED') {
+          initial = 'Expired in market';
+        } else if (s == 'ALERT') {
+          initial = 'Counterfeit';
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _category = initial;
+          if (savedContact != null && savedContact.isNotEmpty) {
+            _contactCtrl.text = savedContact;
+          }
+        });
+      }
+    }();
+  }
+
+  @override
+  void dispose() {
+    _descCtrl.dispose();
+    _contactCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _submitting = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (Firebase.apps.isEmpty) {
+        await Firebase.initializeApp();
+      }
+      final user = FirebaseAuth.instance.currentUser;
+      await FirebaseFirestore.instance.collection('reports').add({
+        'createdAt': FieldValue.serverTimestamp(),
+        'status': widget.status,
+        'category': _category,
+        'description': _descCtrl.text.trim(),
+        'contact': _contactCtrl.text.trim(),
+        'createdByUid': user?.uid ?? 'anonymous',
+        'createdByEmail': user?.email ?? '',
+        'reg_no': widget.productInfo['reg_no'] ?? '',
+        'brand_name': widget.productInfo['brand_name'] ?? '',
+        'generic_name': widget.productInfo['generic_name'] ?? '',
+        'dosage_form': widget.productInfo['dosage_form'] ?? '',
+        'dosage_strength': widget.productInfo['dosage_strength'] ?? '',
+        'country': widget.productInfo['country'] ?? '',
+        'manufacturer': widget.productInfo['manufacturer'] ?? '',
+        'distributor': widget.productInfo['distributor'] ?? '',
+        'reason': widget.productInfo['verification_reasons'] ?? widget.productInfo['match_reason'] ?? '',
+        'appSource': 'scan_result_screen',
+      });
+      // Remember last inputs
+      SettingsService.instance.lastReportCategory = _category;
+      SettingsService.instance.lastReportContact = _contactCtrl.text.trim();
+      await SettingsService.instance.save();
+      if (mounted) Navigator.of(context).pop();
+      messenger.showSnackBar(const SnackBar(content: Text('Report submitted')));
+    } catch (e) {
+      messenger.showSnackBar(const SnackBar(content: Text('Could not submit report. Configure Firebase.')));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.report_gmailerrorred_rounded, color: Colors.redAccent),
+                    const SizedBox(width: 8),
+                    const Text('Report Suspicious Product', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                    const Spacer(),
+                    IconButton(onPressed: () => Navigator.of(context).pop(), icon: const Icon(Icons.close_rounded)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: _category,
+                  items: const [
+                    DropdownMenuItem(value: 'Counterfeit', child: Text('Counterfeit')),
+                    DropdownMenuItem(value: 'Tampered', child: Text('Tampered')),
+                    DropdownMenuItem(value: 'Expired in market', child: Text('Expired in market')),
+                    DropdownMenuItem(value: 'Adverse effect', child: Text('Adverse effect')),
+                    DropdownMenuItem(value: 'Incorrect label', child: Text('Incorrect label')),
+                    DropdownMenuItem(value: 'Other', child: Text('Other')),
+                  ],
+                  onChanged: (v) => setState(() => _category = v ?? _category),
+                  decoration: const InputDecoration(labelText: 'Category'),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _descCtrl,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Describe the issue',
+                    hintText: 'What seems suspicious? Where purchased? Any details…',
+                  ),
+                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Please provide a short description' : null,
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _contactCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Contact (optional)',
+                    hintText: 'Email or phone if you want follow-up',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _submitting ? null : _submit,
+                    icon: _submitting
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.send_rounded),
+                    label: Text(_submitting ? 'Submitting…' : 'Submit Report'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      final summary = StringBuffer()
+                        ..writeln('Suspicious Product Report')
+                        ..writeln('')
+                        ..writeln('Category: $_category')
+                        ..writeln('Description: ${_descCtrl.text.trim()}')
+                        ..writeln('Contact: ${_contactCtrl.text.trim()}')
+                        ..writeln('')
+                        ..writeln('Brand: ${widget.productInfo['brand_name'] ?? ''}')
+                        ..writeln('Generic: ${widget.productInfo['generic_name'] ?? ''}')
+                        ..writeln('Reg No: ${widget.productInfo['reg_no'] ?? ''}')
+                        ..writeln('Status: ${widget.status}')
+                        ..writeln('Dosage: ${widget.productInfo['dosage_form'] ?? ''} ${widget.productInfo['dosage_strength'] ?? ''}')
+                        ..writeln('Manufacturer: ${widget.productInfo['manufacturer'] ?? ''}')
+                        ..writeln('Distributor: ${widget.productInfo['distributor'] ?? ''}')
+                        ..writeln('Country: ${widget.productInfo['country'] ?? ''}');
+                      await Share.share(summary.toString(), subject: 'Suspicious Product Report');
+                    },
+                    icon: const Icon(Icons.share_rounded),
+                    label: const Text('Share report via...'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

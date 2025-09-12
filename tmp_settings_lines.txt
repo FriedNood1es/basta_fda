@@ -1,0 +1,377 @@
+   1 import 'package:flutter/material.dart';
+   2 import 'package:camera/camera.dart';
+   3 import 'package:basta_fda/services/settings_service.dart';
+   4 import 'package:basta_fda/services/auth_service.dart';
+   5 import 'package:basta_fda/services/fda_checker.dart';
+   6 import 'package:basta_fda/screens/login_screen.dart';
+   7 import 'package:basta_fda/screens/reports_screen.dart';
+   8 import 'package:firebase_core/firebase_core.dart';
+   9 import 'package:firebase_auth/firebase_auth.dart';
+  10 import 'package:basta_fda/services/history_service.dart';
+  11 import 'package:flutter/services.dart' show TextInputFormatter, FilteringTextInputFormatter;
+  12 
+  13 class SettingsScreen extends StatefulWidget {
+  14   final FDAChecker fdaChecker;
+  15   const SettingsScreen({super.key, required this.fdaChecker});
+  16 
+  17   @override
+  18   State<SettingsScreen> createState() => _SettingsScreenState();
+  19 }
+  20 
+  21 class _SettingsScreenState extends State<SettingsScreen> {
+  22   bool _loading = true;
+  23 
+  24   @override
+  25   void initState() {
+  26     super.initState();
+  27     SettingsService.instance.load().then((_) => setState(() => _loading = false));
+  28   }
+  29 
+  30   Widget _accountSummary() {
+  31     final s = SettingsService.instance;
+  32     String title;
+  33     String subtitle;
+  34     if (s.guestMode) {
+  35       title = 'Guest mode';
+  36       subtitle = 'Not signed in';
+  37     } else if (Firebase.apps.isNotEmpty && FirebaseAuth.instance.currentUser != null) {
+  38       final u = FirebaseAuth.instance.currentUser!;
+  39       title = (u.displayName?.isNotEmpty ?? false) ? u.displayName! : (u.email ?? 'Signed in');
+  40       subtitle = (u.email ?? '').isNotEmpty ? (u.email!) : 'Google/Firebase account';
+  41     } else if (s.isLoggedIn) {
+  42       title = (s.displayName?.isNotEmpty ?? false) ? s.displayName! : (s.userEmail ?? 'Signed in');
+  43       subtitle = (s.userEmail ?? '').isNotEmpty ? s.userEmail! : 'Account active';
+  44     } else {
+  45       title = 'Not signed in';
+  46       subtitle = 'Tap Logout to return to Login';
+  47     }
+  48 
+  49     return Container(
+  50       margin: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+  51       padding: const EdgeInsets.all(12),
+  52       decoration: BoxDecoration(
+  53         color: Theme.of(context).colorScheme.surface,
+  54         borderRadius: BorderRadius.circular(12),
+  55         border: Border.all(color: Theme.of(context).dividerColor),
+  56       ),
+  57       child: Row(
+  58         children: [
+  59           CircleAvatar(
+  60             radius: 18,
+  61             child: Text((title.isNotEmpty ? title[0] : '?').toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w700)),
+  62           ),
+  63           const SizedBox(width: 12),
+  64           Expanded(
+  65             child: Column(
+  66               crossAxisAlignment: CrossAxisAlignment.start,
+  67               children: [
+  68                 Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+  69                 const SizedBox(height: 2),
+  70                 Text(subtitle, style: TextStyle(color: Theme.of(context).hintColor)),
+  71               ],
+  72             ),
+  73           ),
+  74         ],
+  75       ),
+  76     );
+  77   }
+  78 
+  79   @override
+  80   Widget build(BuildContext context) {
+  81     final s = SettingsService.instance;
+  82     return Scaffold(
+  83       appBar: AppBar(title: const Text('Settings')),
+  84       body: _loading
+  85           ? const Center(child: CircularProgressIndicator())
+  86           : ListView(
+  87               children: [
+  88                 _accountSummary(),
+  89                 if (s.guestMode)
+  90                   Container(
+  91                     margin: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+  92                     padding: const EdgeInsets.all(12),
+  93                     decoration: BoxDecoration(
+  94                       color: Colors.orange.withValues(alpha: 0.12),
+  95                       borderRadius: BorderRadius.circular(12),
+  96                       border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
+  97                     ),
+  98                     child: Row(
+  99                       children: const [
+ 100                         Icon(Icons.person_outline_rounded, color: Colors.orange),
+ 101                         SizedBox(width: 10),
+ 102                         Expanded(child: Text("Guest mode is active. Your session isn't signed in.")),
+ 103                       ],
+ 104                     ),
+ 105                   ),
+ 106                 const SizedBox(height: 6),
+ 107                 SwitchListTile(
+ 108                   title: const Text('Enable live OCR by default'),
+ 109                   subtitle: const Text('Show live suggestions while aiming the camera'),
+ 110                   value: s.liveOcrDefault,
+ 111                   onChanged: (v) => setState(() {
+ 112                     s.liveOcrDefault = v;
+ 113                     s.save();
+ 114                   }),
+ 115                 ),
+ 116                 SwitchListTile(
+ 117                   title: const Text('Review before search'),
+ 118                   subtitle: const Text('Show the review sheet before matching'),
+ 119                   value: s.reviewBeforeSearch,
+ 120                   onChanged: (v) => setState(() {
+ 121                     s.reviewBeforeSearch = v;
+ 122                     s.save();
+ 123                   }),
+ 124                 ),
+ 125                 SwitchListTile(
+ 126                   title: const Text('Wi‑Fi only for data updates'),
+ 127                   subtitle: const Text('Use Wi‑Fi for downloading the latest FDA CSV'),
+ 128                   value: s.wifiOnlyUpdates,
+ 129                   onChanged: (v) => setState(() {
+ 130                     s.wifiOnlyUpdates = v;
+ 131                     s.save();
+ 132                   }),
+ 133                 ),
+ 134                 SwitchListTile(
+ 135                   title: const Text("Smart 'Add side' prompt"),
+ 136                   subtitle: const Text('Suggest adding another package side when OCR looks incomplete'),
+ 137                   value: s.smartAddSidePrompt,
+ 138                   onChanged: (v) => setState(() {
+ 139                     s.smartAddSidePrompt = v;
+ 140                     s.save();
+ 141                   }),
+ 142                 ),
+ 143                 SwitchListTile(
+ 144                   title: const Text('Strict matching'),
+ 145                   subtitle: const Text('Reduce false positives (brand + generic + cues)'),
+ 146                   value: s.strictMatching,
+ 147                   onChanged: (v) => setState(() {
+ 148                     s.strictMatching = v;
+ 149                     s.save();
+ 150                   }),
+ 151                 ),
+ 152                 SwitchListTile(
+ 153                   title: const Text('Update FDA data on Wi‑Fi only'),
+ 154                   subtitle: const Text('Skip online refresh when not connected to Wi‑Fi'),
+ 155                   value: s.wifiOnlyUpdates,
+ 156                   onChanged: (v) => setState(() {
+ 157                     s.wifiOnlyUpdates = v;
+ 158                     s.save();
+ 159                   }),
+ 160                 ),
+ 161                 const Divider(),
+ 162                 ListTile(
+ 163                   leading: const Icon(Icons.cloud_download_rounded),
+ 164                   title: const Text('Update FDA database from URL'),
+ 165                   subtitle: Text(
+ 166                     (SettingsService.instance.fdaUpdateUrl?.isNotEmpty ?? false)
+ 167                         ? SettingsService.instance.fdaUpdateUrl!
+ 168                         : 'Download latest CSV and cache to device',
+ 169                   ),
+ 170                   onTap: () async {
+ 171                     final messenger = ScaffoldMessenger.of(context);
+ 172                     final controller = TextEditingController(text: '');
+ 173                     final url = await showDialog<String?>(
+ 174                       context: context,
+ 175                       builder: (dialogCtx) => AlertDialog(
+ 176                         title: const Text('Enter CSV URL'),
+ 177                         content: SingleChildScrollView(
+ 178                           padding: EdgeInsets.only(
+ 179                             bottom: MediaQuery.of(dialogCtx).viewInsets.bottom,
+ 180                           ),
+ 181                           child: TextField(
+ 182                             controller: controller,
+ 183                             decoration: const InputDecoration(
+ 184                               hintText: 'https://example.com/ALL_DrugProducts.csv',
+ 185                             ),
+ 186                             autofocus: true,
+ 187                             keyboardType: TextInputType.url,
+ 188                             textInputAction: TextInputAction.done,
+ 189                           ),
+ 190                         ),
+ 191                         actions: [
+ 192                           TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancel')),
+ 193                           ElevatedButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Download')),
+ 194                         ],
+ 195                       ),
+ 196                     );
+ 197                     if (url == null || url.isEmpty) return;
+ 198                     messenger.showSnackBar(const SnackBar(content: Text('Downloading update…')));
+ 199                     final ok = await widget.fdaChecker.updateFromUrl(url);
+ 200                     if (!mounted) return;
+ 201                     if (ok) {
+ 202                       final svc = SettingsService.instance;
+ 203                       await svc.load();
+ 204                       svc.fdaUpdateUrl = url;
+ 205                       svc.fdaLastUpdatedAt = DateTime.now();
+ 206                       await svc.save();
+ 207                     }
+ 208                     messenger.showSnackBar(SnackBar(content: Text(ok ? 'FDA data updated' : 'Update failed')));
+ 209                     if (!mounted) return;
+ 210                     setState(() {});
+ 211                   },
+ 212                 ),
+ 213                 if ((SettingsService.instance.fdaUpdateUrl?.isNotEmpty ?? false))
+ 214                   ListTile(
+ 215                     leading: const Icon(Icons.cloud_sync_rounded),
+ 216                     title: const Text('Check for updates now'),
+ 217                     subtitle: const Text('Uses the saved URL and updates if data is stale'),
+ 218                     onTap: () async {
+ 219                       final messenger = ScaffoldMessenger.of(context);
+ 220                       messenger.showSnackBar(const SnackBar(content: Text('Checking for updates…')));
+ 221                       await widget.fdaChecker.ensureLoadedAndFresh();
+ 222                       if (!mounted) return;
+ 223                       messenger.showSnackBar(const SnackBar(content: Text('Update check complete')));
+ 224                       setState(() {});
+ 225                     },
+ 226                   ),
+ 227                 const Divider(),
+ 228                 // Admin: FDA CSV update configuration
+ 229                 Padding(
+ 230                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+ 231                   child: Column(
+ 232                     crossAxisAlignment: CrossAxisAlignment.start,
+ 233                     children: [
+ 234                       Text('FDA CSV Update', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+ 235                       const SizedBox(height: 8),
+ 236                       TextField(
+ 237                         controller: TextEditingController(text: s.fdaUpdateUrl ?? ''),
+ 238                         decoration: const InputDecoration(
+ 239                           labelText: 'CSV Update URL (https://…) ',
+ 240                           hintText: 'Public CSV URL; leave empty to use Firebase manifest',
+ 241                           border: OutlineInputBorder(),
+ 242                           isDense: true,
+ 243                         ),
+ 244                         keyboardType: TextInputType.url,
+ 245                         inputFormatters: [
+ 246                           FilteringTextInputFormatter.deny(RegExp(r"\s")),
+ 247                         ],
+ 248                         onSubmitted: (v) async {
+ 249                           s.fdaUpdateUrl = v.trim().isEmpty ? null : v.trim();
+ 250                           await s.save();
+ 251                           if (!mounted) return;
+ 252                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Update URL saved')));
+ 253                           setState(() {});
+ 254                         },
+ 255                       ),
+ 256                       const SizedBox(height: 8),
+ 257                       Row(
+ 258                         children: [
+ 259                           Expanded(
+ 260                             child: ElevatedButton.icon(
+ 261                               onPressed: () async {
+ 262                                 final messenger = ScaffoldMessenger.of(context);
+ 263                                 messenger.showSnackBar(const SnackBar(content: Text('Checking for online update…')));
+ 264                                 try {
+ 265                                   await widget.fdaChecker.ensureLoadedAndFresh();
+ 266                                   if (!mounted) return;
+ 267                                   messenger.showSnackBar(const SnackBar(content: Text('Check complete')));
+ 268                                   setState(() {});
+ 269                                 } catch (_) {
+ 270                                   if (!mounted) return;
+ 271                                   messenger.showSnackBar(const SnackBar(content: Text('Check failed')));
+ 272                                 }
+ 273                               },
+ 274                               icon: const Icon(Icons.cloud_download_rounded),
+ 275                               label: const Text('Check online update now'),
+ 276                             ),
+ 277                           ),
+ 278                         ],
+ 279                       ),
+ 280                     ],
+ 281                   ),
+ 282                 ),
+ 283                 const Divider(),
+ 284                 ListTile(
+ 285                   leading: const Icon(Icons.list_alt_rounded),
+ 286                   title: const Text('View submitted reports (admin)'),
+ 287                   subtitle: const Text('Requires Firebase configuration'),
+ 288                   onTap: () {
+ 289                     Navigator.push(context, MaterialPageRoute(builder: (_) => const ReportsScreen()));
+ 290                   },
+ 291                 ),
+ 292                 const Divider(),
+ 293                 ListTile(
+ 294                   leading: const Icon(Icons.sync_rounded),
+ 295                   title: const Text('Refresh FDA database (cache/asset)'),
+ 296                   subtitle: Builder(builder: (context) {
+ 297                     if (!widget.fdaChecker.isLoaded) return const Text('Not loaded yet');
+ 298                     final s = SettingsService.instance;
+ 299                     final last = s.fdaLastUpdatedAt ?? widget.fdaChecker.loadedAt;
+ 300                     final stale = widget.fdaChecker.isStale;
+ 301                     final lastText = last != null ? last.toString() : 'unknown';
+ 302                     final staleText = stale ? ' • STALE' : '';
+ 303                     return Text('Loaded rows: ${widget.fdaChecker.rowCount} • Last updated: $lastText$staleText');
+ 304                   }),
+ 305                   onTap: () async {
+ 306                     final messenger = ScaffoldMessenger.of(context);
+ 307                     await widget.fdaChecker.loadCSVIsolatePreferCache();
+ 308                     if (!context.mounted) return;
+ 309                     messenger.showSnackBar(const SnackBar(content: Text('FDA data reloaded')));
+ 310                     setState(() {});
+ 311                   },
+ 312                 ),
+ 313                 const Divider(),
+ 314                 ListTile(
+ 315                   leading: const Icon(Icons.logout_rounded, color: Colors.redAccent),
+ 316                   title: Text(s.guestMode ? 'End Guest Session' : 'Logout'),
+ 317                   subtitle: Text(s.guestMode ? 'Return to login screen' : 'End session and return to login'),
+ 318                   onTap: () async {
+ 319                     final ok = await showDialog<bool>(
+ 320                       context: context,
+ 321                       builder: (_) => AlertDialog(
+ 322                         title: Text(s.guestMode ? 'End guest session?' : 'Logout?'),
+ 323                         content: Text(s.guestMode ? 'You will need to login or skip again next time.' : 'You will need to login again next time.'),
+ 324                         actions: [
+ 325                           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+ 326                           ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text(s.guestMode ? 'End' : 'Logout')),
+ 327                         ],
+ 328                       ),
+ 329                     );
+ 330                     if (ok == true) {
+ 331                       final s = SettingsService.instance;
+ 332                       await s.load();
+ 333                       s.isLoggedIn = false;
+ 334                       s.guestMode = false;
+ 335                       s.userEmail = null;
+ 336                       s.displayName = null;
+ 337                       await s.save();
+ 338                       await AuthService.instance.signOut();
+ 339                       // Switch history to guest profile on logout
+ 340                       await HistoryService.instance.switchProfileKey('guest');
+ 341                       try {
+ 342                         final cameras = await availableCameras();
+ 343                         if (!context.mounted) return;
+ 344                         Navigator.of(context).pushAndRemoveUntil(
+ 345                           MaterialPageRoute(builder: (_) => LoginScreen(cameras: cameras, fdaChecker: widget.fdaChecker)),
+ 346                           (route) => false,
+ 347                         );
+ 348                       } catch (_) {
+ 349                         if (!context.mounted) return;
+ 350                         Navigator.of(context).pop();
+ 351                       }
+ 352                     }
+ 353                   },
+ 354                 ),
+ 355                 const Divider(),
+ 356                 AboutListTile(
+ 357                   applicationName: 'bastaFDA',
+ 358                   applicationVersion: '1.0.0',
+ 359                   applicationLegalese: 'Ac 2025',
+ 360                   applicationIcon: Image.asset('assets/logo.png', height: 40),
+ 361                   aboutBoxChildren: const [
+ 362                     SizedBox(height: 12),
+ 363                     Text(
+ 364                       'Your first defense against fake medicines.',
+ 365                       style: TextStyle(fontWeight: FontWeight.w600),
+ 366                     ),
+ 367                     SizedBox(height: 8),
+ 368                     Text(
+ 369                       'bastaFDA: Counterfeit Product Scanner helps you verify if medicines and supplements are FDA-approved in seconds. Just scan the packaging with your phone, and the app uses OCR to check product details against the FDA database. Get instant results — Registered, Not Found, or Flagged — and report suspicious products to stay safe and informed.',
+ 370                     ),
+ 371                   ],
+ 372                 ),
+ 373               ],
+ 374             ),
+ 375     );
+ 376   }
+ 377 }

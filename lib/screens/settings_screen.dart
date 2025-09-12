@@ -8,6 +8,8 @@ import 'package:basta_fda/screens/reports_screen.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:basta_fda/services/history_service.dart';
+import 'package:flutter/services.dart' show TextInputFormatter, FilteringTextInputFormatter;
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class SettingsScreen extends StatefulWidget {
   final FDAChecker fdaChecker;
@@ -19,11 +21,27 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _loading = true;
+  bool _isAdmin = false;
 
   @override
   void initState() {
     super.initState();
-    SettingsService.instance.load().then((_) => setState(() => _loading = false));
+    SettingsService.instance.load().then((_) async {
+      if (mounted) setState(() => _loading = false);
+      // Determine admin (best-effort; safe if Firebase not configured)
+      try {
+        if (Firebase.apps.isEmpty) {
+          await Firebase.initializeApp();
+        }
+        final u = FirebaseAuth.instance.currentUser;
+        if (u != null) {
+          final snap = await FirebaseFirestore.instance.collection('admins').doc(u.uid).get();
+          if (mounted) setState(() => _isAdmin = snap.exists);
+        }
+      } catch (_) {
+        if (mounted) setState(() => _isAdmin = false);
+      }
+    });
   }
 
   Widget _accountSummary() {
@@ -122,6 +140,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   }),
                 ),
                 SwitchListTile(
+                  title: const Text('Wi‑Fi only for data updates'),
+                  subtitle: const Text('Use Wi‑Fi for downloading the latest FDA CSV'),
+                  value: s.wifiOnlyUpdates,
+                  onChanged: (v) => setState(() {
+                    s.wifiOnlyUpdates = v;
+                    s.save();
+                  }),
+                ),
+                SwitchListTile(
+                  title: const Text("Smart 'Add side' prompt"),
+                  subtitle: const Text('Suggest adding another package side when OCR looks incomplete'),
+                  value: s.smartAddSidePrompt,
+                  onChanged: (v) => setState(() {
+                    s.smartAddSidePrompt = v;
+                    s.save();
+                  }),
+                ),
+                SwitchListTile(
                   title: const Text('Strict matching'),
                   subtitle: const Text('Reduce false positives (brand + generic + cues)'),
                   value: s.strictMatching,
@@ -130,6 +166,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     s.save();
                   }),
                 ),
+                SwitchListTile(
+                  title: const Text('Update FDA data on Wi‑Fi only'),
+                  subtitle: const Text('Skip online refresh when not connected to Wi‑Fi'),
+                  value: s.wifiOnlyUpdates,
+                  onChanged: (v) => setState(() {
+                    s.wifiOnlyUpdates = v;
+                    s.save();
+                  }),
+                ),
+                if (_isAdmin) ...[
                 const Divider(),
                 ListTile(
                   leading: const Icon(Icons.cloud_download_rounded),
@@ -196,6 +242,131 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       setState(() {});
                     },
                   ),
+                ],
+                if (_isAdmin) ...[
+                const Divider(),
+                // Admin: FDA CSV update configuration
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('FDA CSV Update', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: TextEditingController(text: s.fdaUpdateUrl ?? ''),
+                        decoration: const InputDecoration(
+                          labelText: 'CSV Update URL (https://…) ',
+                          hintText: 'Public CSV URL; leave empty to use Firebase manifest',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        keyboardType: TextInputType.url,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.deny(RegExp(r"\s")),
+                        ],
+                        onSubmitted: (v) async {
+                          s.fdaUpdateUrl = v.trim().isEmpty ? null : v.trim();
+                          await s.save();
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Update URL saved')));
+                          setState(() {});
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () async {
+                                final messenger = ScaffoldMessenger.of(context);
+                                messenger.showSnackBar(const SnackBar(content: Text('Checking for online update…')));
+                                try {
+                                  await widget.fdaChecker.ensureLoadedAndFresh();
+                                  if (!mounted) return;
+                                  messenger.showSnackBar(const SnackBar(content: Text('Check complete')));
+                                  setState(() {});
+                                } catch (_) {
+                                  if (!mounted) return;
+                                  messenger.showSnackBar(const SnackBar(content: Text('Check failed')));
+                                }
+                              },
+                              icon: const Icon(Icons.cloud_download_rounded),
+                              label: const Text('Check online update now'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.verified_user_rounded),
+                  title: const Text('Check admin status'),
+                  subtitle: const Text('Shows current Firebase project, UID, and admin check'),
+                  onTap: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    try {
+                      if (Firebase.apps.isEmpty) {
+                        await Firebase.initializeApp();
+                      }
+                      final app = Firebase.app();
+                      final projectId = app.options.projectId ?? '(unknown)';
+                      final uid = FirebaseAuth.instance.currentUser?.uid ?? '(not signed in)';
+                      final email = FirebaseAuth.instance.currentUser?.email ?? '';
+                      bool isAdmin = false;
+                      String? errorDetail;
+                      String docPath = 'admins/$uid';
+                      try {
+                        if (uid != '(not signed in)') {
+                          final snap = await FirebaseFirestore.instance.collection('admins').doc(uid).get();
+                          isAdmin = snap.exists;
+                        }
+                      } catch (e) {
+                        errorDetail = e.toString();
+                      }
+                      if (!mounted) return;
+                      await showDialog(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: const Text('Admin status'),
+                          content: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Project ID: $projectId'),
+                              const SizedBox(height: 6),
+                              Text('UID: $uid'),
+                              const SizedBox(height: 6),
+                              Text('Doc path: $docPath'),
+                              if (email.isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                Text('Email: $email'),
+                              ],
+                              const SizedBox(height: 12),
+                              Text(isAdmin ? 'You ARE an admin.' : 'You are NOT an admin.',
+                                  style: TextStyle(fontWeight: FontWeight.w700, color: isAdmin ? Colors.green : Theme.of(context).colorScheme.error)),
+                              if (errorDetail != null && errorDetail!.isNotEmpty) ...[
+                                const SizedBox(height: 12),
+                                Text('Error while reading admin doc:', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                                const SizedBox(height: 4),
+                                Text(errorDetail!, style: const TextStyle(fontSize: 12)),
+                                const SizedBox(height: 6),
+                                const Text('Tip: allow authenticated read on /admins/{uid} in Firestore rules.' , style: TextStyle(fontSize: 12)),
+                              ],
+                            ],
+                          ),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+                          ],
+                        ),
+                      );
+                    } catch (e) {
+                      messenger.showSnackBar(const SnackBar(content: Text('Firebase not configured.')));
+                    }
+                  },
+                ),
                 const Divider(),
                 ListTile(
                   leading: const Icon(Icons.list_alt_rounded),
@@ -206,6 +377,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 const Divider(),
+                ],
                 ListTile(
                   leading: const Icon(Icons.sync_rounded),
                   title: const Text('Refresh FDA database (cache/asset)'),
@@ -291,3 +463,4 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 }
+

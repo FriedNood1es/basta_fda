@@ -120,7 +120,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                           _password.text,
                                         );
                                     setState(() => _busy = false);
-                                    if (!mounted) return;
+                                    if (!context.mounted) return;
                                     if (!ok) {
                                       ScaffoldMessenger.of(
                                         context,
@@ -144,6 +144,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                           .switchProfileKey(u.uid);
                                     }
                                     await s.save();
+                                    if (!context.mounted) return;
                                     // Give the user immediate success feedback
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
@@ -153,6 +154,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     await Future.delayed(
                                       const Duration(milliseconds: 500),
                                     );
+                                    if (!context.mounted) return;
                                     Navigator.pushReplacement(
                                       context,
                                       MaterialPageRoute(
@@ -185,7 +187,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     final (ok, err) = await AuthService.instance
                                         .signInWithGoogle();
                                     setState(() => _busy = false);
-                                    if (!mounted) return;
+                                    if (!context.mounted) return;
                                     if (!ok) {
                                       ScaffoldMessenger.of(
                                         context,
@@ -204,6 +206,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     s.guestMode = false;
                                     s.authProvider = 'google';
                                     await s.save();
+                                    if (!context.mounted) return;
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
                                         content: Text('Signed in with Google'),
@@ -212,6 +215,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     await Future.delayed(
                                       const Duration(milliseconds: 500),
                                     );
+                                    if (!context.mounted) return;
                                     Navigator.pushReplacement(
                                       context,
                                       MaterialPageRoute(
@@ -270,6 +274,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 await Future.delayed(
                                   const Duration(milliseconds: 450),
                                 );
+                                if (!context.mounted) return;
                                 Navigator.pushReplacement(
                                   context,
                                   MaterialPageRoute(
@@ -408,7 +413,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                         displayName: _name.text.trim(),
                                       );
                                   setState(() => _busy = false);
-                                  if (!mounted) return;
+                                  if (!context.mounted) return;
                                   if (!ok) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
@@ -432,6 +437,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                         .switchProfileKey(u.uid);
                                   }
                                   await s.save();
+                                  if (!context.mounted) return;
                                   // Show success before navigating
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
@@ -441,6 +447,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                   await Future.delayed(
                                     const Duration(milliseconds: 600),
                                   );
+                                  if (!context.mounted) return;
                                   Navigator.pushAndRemoveUntil(
                                     context,
                                     MaterialPageRoute(
@@ -474,7 +481,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                   final (ok, err) = await AuthService.instance
                                       .signInWithGoogle();
                                   setState(() => _busy = false);
-                                  if (!mounted) return;
+                                  if (!context.mounted) return;
                                   if (!ok) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
@@ -498,6 +505,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                         .switchProfileKey(u.uid);
                                   }
                                   await s.save();
+                                  if (!context.mounted) return;
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
                                       content: Text('Signed in with Google'),
@@ -506,6 +514,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                   await Future.delayed(
                                     const Duration(milliseconds: 500),
                                   );
+                                  if (!context.mounted) return;
                                   Navigator.pushAndRemoveUntil(
                                     context,
                                     MaterialPageRoute(

@@ -10,6 +10,9 @@ class SettingsService {
   bool liveOcrDefault = false;
   bool reviewBeforeSearch = true;
   bool strictMatching = true;
+  bool wifiOnlyUpdates = false;
+  // Suggest adding another package side after a scan when OCR evidence looks incomplete
+  bool smartAddSidePrompt = true;
   bool hasSeenWelcome = false;
   bool isLoggedIn = false;
   bool guestMode = false;
@@ -18,6 +21,10 @@ class SettingsService {
   String? displayName;
   String? fdaUpdateUrl;
   DateTime? fdaLastUpdatedAt;
+  DateTime? fdaLastCheckedAt; // last time we attempted an online refresh
+  // Reporter convenience
+  String? lastReportCategory;
+  String? lastReportContact;
 
   Future<File> _file() async {
     final dir = await getApplicationDocumentsDirectory();
@@ -34,6 +41,8 @@ class SettingsService {
         liveOcrDefault = (json['liveOcrDefault'] ?? false) as bool;
         reviewBeforeSearch = (json['reviewBeforeSearch'] ?? true) as bool;
         strictMatching = (json['strictMatching'] ?? true) as bool;
+        wifiOnlyUpdates = (json['wifiOnlyUpdates'] ?? false) as bool;
+        smartAddSidePrompt = (json['smartAddSidePrompt'] ?? true) as bool;
         hasSeenWelcome = (json['hasSeenWelcome'] ?? false) as bool;
         isLoggedIn = (json['isLoggedIn'] ?? false) as bool;
         guestMode = (json['guestMode'] ?? false) as bool;
@@ -45,6 +54,12 @@ class SettingsService {
         if (ts != null && ts.isNotEmpty) {
           fdaLastUpdatedAt = DateTime.tryParse(ts);
         }
+        final chk = json['fdaLastCheckedAt'] as String?;
+        if (chk != null && chk.isNotEmpty) {
+          fdaLastCheckedAt = DateTime.tryParse(chk);
+        }
+        lastReportCategory = (json['lastReportCategory'] as String?)?.trim();
+        lastReportContact = (json['lastReportContact'] as String?)?.trim();
       }
     } catch (_) {
       // defaults
@@ -59,6 +74,8 @@ class SettingsService {
       'liveOcrDefault': liveOcrDefault,
       'reviewBeforeSearch': reviewBeforeSearch,
       'strictMatching': strictMatching,
+      'wifiOnlyUpdates': wifiOnlyUpdates,
+      'smartAddSidePrompt': smartAddSidePrompt,
       'hasSeenWelcome': hasSeenWelcome,
       'isLoggedIn': isLoggedIn,
       'guestMode': guestMode,
@@ -67,6 +84,9 @@ class SettingsService {
       'displayName': displayName,
       'fdaUpdateUrl': fdaUpdateUrl,
       'fdaLastUpdatedAt': fdaLastUpdatedAt?.toIso8601String(),
+      'fdaLastCheckedAt': fdaLastCheckedAt?.toIso8601String(),
+      'lastReportCategory': lastReportCategory,
+      'lastReportContact': lastReportContact,
     });
     await f.writeAsString(data, flush: true);
   }

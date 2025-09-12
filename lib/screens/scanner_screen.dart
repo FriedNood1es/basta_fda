@@ -39,6 +39,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
   bool _isCapturing = false;
   bool _showExtractedExpanded = false;
   String? _lastRawText; // keep last raw OCR text for Reg No extraction
+  // Multi-angle capture session (accumulate OCR from multiple sides)
+  final List<String> _sessionTexts = [];
+  final List<String> _sessionRawTexts = [];
+  // Nudge throttling
+  DateTime? _lastNudgeAt;
   // Tap-to-focus + pinch-to-zoom
   Offset? _lastFocusTap;
   DateTime? _lastFocusAt;
@@ -236,6 +241,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
       setState(() {
         _extractedText = scannedText;
       });
+      // Suggest adding another side if OCR looks incomplete and setting is enabled
+      _maybeNudgeAddSide(rawText, scannedText);
       return scannedText;
     } catch (e) {
       debugPrint('OCR photo scan error: $e');
@@ -250,6 +257,66 @@ class _ScannerScreenState extends State<ScannerScreen> {
         try { await _controller!.unlockCaptureOrientation(); } catch (_) {}
       }
     }
+  }
+
+  bool _shouldNudgeForAnotherSide(String raw, String clean) {
+    // If a reg-like code is present, we already have strong evidence
+    final hasReg = widget.fdaChecker.regCandidates(raw).isNotEmpty;
+    if (hasReg) return false;
+
+    final rawL = raw.toLowerCase();
+    final cleanL = clean.toLowerCase();
+
+    // Evidence cues
+    final hasStrength = RegExp(r"\b\d+(?:\.\d+)?\s*(mg|g|mcg)\b").hasMatch(rawL) || cleanL.contains('mg');
+    final hasForm = ['tablet','capsule','syrup','cream','ointment','solution','suspension','injection']
+        .any((t) => cleanL.contains(t));
+    final hasParty = rawL.contains('manufactured by') || rawL.contains('manufacturer') ||
+        rawL.contains('distributed by') || rawL.contains('distributor');
+    final hasExpiryCue = rawL.contains('exp') || rawL.contains('expiry') || rawL.contains('expiration');
+
+    int cues = 0;
+    if (hasStrength) cues++;
+    if (hasForm) cues++;
+    if (hasParty) cues++;
+    if (hasExpiryCue) cues++;
+
+    // Very short text likely incomplete
+    final tooShort = cleanL.length < 30;
+
+    // Nudge when there is low evidence
+    return cues < 2 || tooShort;
+  }
+
+  void _maybeNudgeAddSide(String raw, String clean) {
+    final s = SettingsService.instance;
+    if (!s.smartAddSidePrompt) return;
+    if (!_shouldNudgeForAnotherSide(raw, clean)) return;
+    final now = DateTime.now();
+    if (_lastNudgeAt != null && now.difference(_lastNudgeAt!) < const Duration(seconds: 10)) return;
+    _lastNudgeAt = now;
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Label may be incomplete. Add another side?'),
+        action: SnackBarAction(
+          label: 'Add side',
+          onPressed: () {
+            final cleanTxt = _extractedText.trim();
+            final rawTxt = (_lastRawText ?? _extractedText).trim();
+            if (cleanTxt.isNotEmpty) _sessionTexts.add(cleanTxt);
+            if (rawTxt.isNotEmpty) _sessionRawTexts.add(rawTxt);
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Side added (${_sessionRawTexts.length})')),
+              );
+            }
+          },
+        ),
+        duration: const Duration(seconds: 6),
+      ),
+    );
   }
 
   List<String> _extractSuggestions(RecognizedText result) {
@@ -390,9 +457,19 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   
 
-  Future<void> _executeSearch(String text) async {
+  Future<void> _executeSearch(String text, {String? rawOverride}) async {
+    // Show a lightweight blocking overlay while matching
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const _MatchingDialog(),
+      );
+      // Give the dialog a frame to render
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
     // Prefer direct Reg. No. match using raw OCR (more reliable for patterns)
-    final raw = _lastRawText ?? text;
+    final raw = rawOverride ?? _lastRawText ?? text;
     final byReg = widget.fdaChecker.findByRegNo(raw);
     // If a reg-like code is present but not found, avoid heuristic false positives
     final regLike = RegExp(r"\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b").hasMatch(raw) ||
@@ -407,6 +484,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
       }
       await HistoryService.instance.addEntry(scannedText: text, productInfo: matchedProduct, status: status);
       if (!mounted) return;
+      // Close matching overlay before navigating
+      if (Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -416,7 +497,14 @@ class _ScannerScreenState extends State<ScannerScreen> {
           ),
         ),
       );
+      // Clear any accumulated sides after a completed search
+      _sessionTexts.clear();
+      _sessionRawTexts.clear();
     } else {
+      // Close matching overlay before navigating
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
       await HistoryService.instance.addEntry(scannedText: raw, productInfo: null, status: 'NOT FOUND');
       if (!mounted) return;
       final returned = await Navigator.push(
@@ -431,6 +519,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
           await _reviewAndSearch(preset: returned, capturePhoto: false);
         } else {
           await _executeSearch(returned);
+        }
+      } else {
+        // Ensure we close overlay if no navigation occurred
+        if (mounted && Navigator.canPop(context)) {
+          Navigator.of(context).pop();
         }
       }
     }
@@ -549,19 +642,29 @@ appBar: AppBar(
               top: 12,
               left: 12,
               right: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.orange.withValues(alpha: 0.5)),
-                ),
-                child: Row(
-                  children: const [
-                    Icon(Icons.info_outline_rounded, color: Colors.orange, size: 16),
-                    SizedBox(width: 8),
-                    Expanded(child: Text('FDA data may be out of date. Open Settings to update.', style: TextStyle(color: Colors.orange))),
-                  ],
+              child: GestureDetector(
+                onTap: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  messenger.showSnackBar(const SnackBar(content: Text('Checking for FDA updates…')));
+                  await widget.fdaChecker.ensureLoadedAndFresh();
+                  if (!mounted) return;
+                  setState(() {});
+                  messenger.showSnackBar(const SnackBar(content: Text('Update check complete')));
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.orange.withValues(alpha: 0.5)),
+                  ),
+                  child: Row(
+                    children: const [
+                      Icon(Icons.info_outline_rounded, color: Colors.orange, size: 16),
+                      SizedBox(width: 8),
+                      Expanded(child: Text('FDA data may be out of date. Tap to update now.', style: TextStyle(color: Colors.orange))),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -688,9 +791,51 @@ appBar: AppBar(
                   const SizedBox(height: 10),
                   Row(
                     children: [
+                      // Add side to accumulate more text from other faces of the packaging
+                      if (widget.fdaChecker.isLoaded)
+                        OutlinedButton.icon(
+                          onPressed: _isCapturing
+                              ? null
+                              : () {
+                                  final clean = _extractedText.trim();
+                                  final raw = (_lastRawText ?? _extractedText).trim();
+                                  if (clean.isNotEmpty) _sessionTexts.add(clean);
+                                  if (raw.isNotEmpty) _sessionRawTexts.add(raw);
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Side added (${_sessionRawTexts.length})')),
+                                    );
+                                  }
+                                },
+                          icon: const Icon(Icons.add_photo_alternate_rounded),
+                          label: const Text('Add side'),
+                        ),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: _isCapturing || !widget.fdaChecker.isLoaded ? null : _matchScannedText,
+                          onPressed: _isCapturing || !widget.fdaChecker.isLoaded
+                              ? null
+                              : () {
+                                  // If multiple sides were added, combine them for a single robust search
+                                  if (_sessionRawTexts.isNotEmpty || _sessionTexts.isNotEmpty) {
+                                    final combinedRaw = ([..._sessionRawTexts, _lastRawText ?? '']
+                                            .where((s) => s.trim().isNotEmpty)
+                                            .join(' '))
+                                        .trim();
+                                    final combinedClean = ([..._sessionTexts, _extractedText]
+                                            .where((s) => s.trim().isNotEmpty)
+                                            .join(' '))
+                                        .trim();
+                                    final wantsReview = SettingsService.instance.reviewBeforeSearch;
+                                    if (wantsReview) {
+                                      _reviewAndSearch(preset: combinedClean, capturePhoto: false);
+                                    } else {
+                                      _executeSearch(combinedClean, rawOverride: combinedRaw);
+                                    }
+                                  } else {
+                                    _matchScannedText();
+                                  }
+                                },
                           child: _isCapturing
                               ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
                               : Text(widget.fdaChecker.isLoaded ? 'Confirm' : 'Loading…'),
@@ -698,6 +843,11 @@ appBar: AppBar(
                       ),
                     ],
                   ),
+                  if (_sessionRawTexts.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text('Sides added: ${_sessionRawTexts.length}', style: Theme.of(context).textTheme.bodySmall),
+                    ),
                 ],
               ),
             ),
@@ -718,6 +868,33 @@ Widget _roundIconButton({required IconData icon, required VoidCallback onTap, St
       tooltip: tooltip,
     ),
   );
+}
+
+class _MatchingDialog extends StatelessWidget {
+  const _MatchingDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              height: 22,
+              width: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            ),
+            const SizedBox(width: 14),
+            Text('Matching product…', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _ReticlePainter extends CustomPainter {

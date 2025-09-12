@@ -4,6 +4,7 @@ import 'package:csv/csv.dart';
 import 'package:string_similarity/string_similarity.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:basta_fda/services/fda_firebase_updater.dart';
 import 'package:basta_fda/services/settings_service.dart';
 
@@ -11,8 +12,21 @@ class FDAChecker {
   List<List<dynamic>> _data = [];
   DateTime? _loadedAt;
   final Map<String, List<dynamic>> _regIndex = {};
+  final Map<String, int> _colIndex = {
+    'reg_no': 1,
+    'generic_name': 2,
+    'brand_name': 3,
+    'dosage_strength': 4,
+    'dosage_form': 5,
+    'manufacturer': 9,
+    'country': 10,
+    'distributor': 13,
+    'issuance_date': 15,
+    'expiry_date': 16,
+  };
   static const String _cacheFileName = 'FDA_Products_cached.csv';
   static const Duration _staleAfter = Duration(days: 30);
+  bool _columnsDerived = false;
 
   bool get isLoaded => _data.isNotEmpty;
   int get rowCount => _data.isNotEmpty ? _data.length - 1 : 0; // minus header row
@@ -36,12 +50,15 @@ class FDAChecker {
         return row.map((cell) => cell.toString().toLowerCase().trim()).toList();
       }).toList();
       _loadedAt = DateTime.now();
+      if (_data.isNotEmpty) { _deriveColIndex(_data.first); }
+      if (_data.isNotEmpty) _deriveColIndex(_data.first);
 
       // Build registration number index for O(1) exact matches
       _regIndex.clear();
+      final regIdx = _regCol();
       for (final row in _data.skip(1)) {
         if (row.length < 2) continue;
-        final reg = row[1].toString();
+        final reg = (regIdx >= 0 && regIdx < row.length) ? row[regIdx].toString() : '';
         if (reg.isEmpty) continue;
         final n = _normalizeReg(reg);
         if (n.isEmpty) continue;
@@ -68,6 +85,51 @@ class FDAChecker {
     return input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 
+  // Determine column indices from header row when available
+  void _deriveColIndex(List<dynamic> headerRow) {
+    if (headerRow.isEmpty) return;
+    List<String> names = headerRow.map((e) => e.toString()).toList();
+    String hNorm(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\s]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    for (int i = 0; i < names.length; i++) {
+      final n = hNorm(names[i]);
+      if (n.isEmpty) continue;
+      if (n.contains('reg') && (n.contains('no') || n.contains('number'))) {
+        _colIndex['reg_no'] = i;
+      } else if (n.contains('generic')) {
+        _colIndex['generic_name'] = i;
+      } else if (n.contains('brand')) {
+        _colIndex['brand_name'] = i;
+      } else if (n.contains('strength')) {
+        _colIndex['dosage_strength'] = i;
+      } else if (n.contains('dosage') && n.contains('form')) {
+        _colIndex['dosage_form'] = i;
+      } else if (n.contains('manufacturer')) {
+        _colIndex['manufacturer'] = i;
+      } else if (n.contains('country')) {
+        _colIndex['country'] = i;
+      } else if (n.contains('distributor')) {
+        _colIndex['distributor'] = i;
+      } else if ((n.contains('issue') || n.contains('issuance') || n.contains('date of issue'))) {
+        _colIndex['issuance_date'] = i;
+      } else if (n.contains('expiry') || n.contains('expiration')) {
+        _colIndex['expiry_date'] = i;
+      }
+    }
+    _columnsDerived = true;
+  }
+
+  int _regCol() => _colIndex['reg_no'] ?? 1;
+
+  String _getField(List<dynamic> row, String key) {
+    if (!_columnsDerived && _data.isNotEmpty) {
+      _deriveColIndex(_data.first);
+    }
+    final idx = _colIndex[key];
+    if (idx == null) return '';
+    if (idx < 0 || idx >= row.length) return '';
+    return row[idx]?.toString() ?? '';
+  }
+
   // Tokens useful for fuzzy name comparisons (manufacturer/distributor)
   static const Set<String> _nameStopwords = {
     'inc', 'incorporated', 'corp', 'corporation', 'company', 'co', 'ltd', 'limited',
@@ -88,6 +150,43 @@ class FDAChecker {
     final bSet = _nameTokens(b).toSet();
     if (aSet.isEmpty || bSet.isEmpty) return 0;
     return aSet.intersection(bSet).length;
+  }
+
+  // Extract likely party names from label such as "manufactured by X", "distributed by Y", "imported by Z".
+  List<String> _extractPartyNames(String raw) {
+    final text = raw.toLowerCase();
+    final List<String> out = [];
+    final patterns = <RegExp>[
+      RegExp(r"manufactured by\s*[:\-]?\s*([a-z0-9\s,&\.\-]{3,})"),
+      RegExp(r"manufacturer\s*[:\-]?\s*([a-z0-9\s,&\.\-]{3,})"),
+      RegExp(r"distributed by\s*[:\-]?\s*([a-z0-9\s,&\.\-]{3,})"),
+      RegExp(r"imported by\s*[:\-]?\s*([a-z0-9\s,&\.\-]{3,})"),
+      RegExp(r"marketed by\s*[:\-]?\s*([a-z0-9\s,&\.\-]{3,})"),
+    ];
+    String clean(String s) {
+      // Stop at common terminators (newline, country keywords, contact lines)
+      final cut = s.split(RegExp(r"\b(contact|tel|phone|email|website|www\.|made in|product of)\b")).first;
+      return cut.replaceAll(RegExp(r"\s+"), " ").trim();
+    }
+    for (final re in patterns) {
+      for (final m in re.allMatches(text)) {
+        final g = m.group(1);
+        if (g != null) {
+          final c = clean(g);
+          if (c.length >= 3) out.add(c);
+        }
+      }
+    }
+    // Dedup
+    final seen = <String>{};
+    final res = <String>[];
+    for (final s in out) {
+      final key = _normalizeText(s);
+      if (key.isEmpty || seen.contains(key)) continue;
+      seen.add(key);
+      res.add(s);
+    }
+    return res;
   }
 
   /// Try to extract registration number candidates from scanned text.
@@ -122,7 +221,42 @@ class FDAChecker {
   }
 
   // Expose candidates for UI/other callers
-  List<String> regCandidates(String raw) => _extractRegCandidates(raw);
+  List<String> regCandidates(String raw) => _extractRegCandidatesImproved(raw);
+
+  // Improved extractor: supports hyphen/space/compact forms and labeled variants
+  List<String> _extractRegCandidatesImproved(String raw) {
+    final List<String> out = [];
+    final text = raw;
+    final explicit = RegExp(r'\b[A-Za-z]{3,4}[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?\b');
+    for (final m in explicit.allMatches(text)) {
+      out.add(m.group(0)!.trim());
+    }
+    final labeled = RegExp(
+      r'\b(?:fda\s*)?reg(?:istration)?\.?\s*(?:no\.?|number)?\s*[:#-]?\s*([A-Za-z]{3,4}[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?)\b',
+      caseSensitive: false,
+    );
+    for (final m in labeled.allMatches(text)) {
+      final g = m.group(1);
+      if (g != null) out.add(g.trim());
+    }
+    final compact = RegExp(r'\b[A-Za-z]{3,4}\d{3,6}(?:\d{2,4})?\b');
+    for (final m in compact.allMatches(text)) {
+      out.add(m.group(0)!.trim());
+    }
+    // Include legacy extractor results to avoid missing formats and keep backward-compatibility
+    try {
+      out.addAll(_extractRegCandidates(raw));
+    } catch (_) {}
+    final seen = <String>{};
+    final dedup = <String>[];
+    for (final c in out) {
+      final n = _normalizeReg(c);
+      if (n.isEmpty || seen.contains(n)) continue;
+      seen.add(n);
+      dedup.add(c);
+    }
+    return dedup;
+  }
 
   /// Try to find a product by Registration Number, returning exact match if found.
   Map<String, String>? findByRegNo(String scannedText) {
@@ -130,9 +264,10 @@ class FDAChecker {
     try {
       // Lazily build index if empty
       if (_regIndex.isEmpty && _data.length > 1) {
+        final regIdx = _regCol();
         for (final row in _data.skip(1)) {
           if (row.length < 2) continue;
-          final reg = row[1].toString();
+          final reg = (regIdx >= 0 && regIdx < row.length) ? row[regIdx].toString() : '';
           if (reg.isEmpty) continue;
           final n = _normalizeReg(reg);
           if (n.isEmpty) continue;
@@ -140,14 +275,14 @@ class FDAChecker {
         }
       }
 
-      final candidates = _extractRegCandidates(scannedText);
+      final candidates = _extractRegCandidatesImproved(scannedText);
       if (candidates.isEmpty) return null;
       for (final c in candidates) {
         final key = _normalizeReg(c);
         // try exact
         List<dynamic>? row = _regIndex[key];
         if (row != null) {
-          debugPrint('[FDAChecker] reg-no exact match: ${row[1]}');
+          debugPrint('[FDAChecker] reg-no exact match: ${_getField(row, 'reg_no')}');
           final m = _buildMap(row);
           m['match_reason'] = 'Registration number exact match';
           return m;
@@ -156,7 +291,7 @@ class FDAChecker {
         for (final v in _regVariants(key)) {
           row = _regIndex[v];
           if (row != null) {
-            debugPrint('[FDAChecker] reg-no tolerant match: ${row[1]} (from $c)');
+            debugPrint('[FDAChecker] reg-no tolerant match: ${_getField(row, 'reg_no')} (from $c)');
             final m = _buildMap(row);
             m['match_reason'] = 'Registration number close match (OCR tolerant)';
             return m;
@@ -205,15 +340,35 @@ class FDAChecker {
       final isStale = last == null || now.difference(last) > _staleAfter;
       if (!isStale) return;
 
+      // Avoid excessive checks: throttle online check attempts (e.g., every 12h)
+      final lastCheck = s.fdaLastCheckedAt;
+      if (lastCheck != null && now.difference(lastCheck) < const Duration(hours: 12)) {
+        return;
+      }
+
+      // Respect Wi‑Fi-only updates if enabled
+      if (s.wifiOnlyUpdates) {
+        try {
+      final results = await Connectivity().checkConnectivity();
+      final onWifi = results.contains(ConnectivityResult.wifi);
+          if (!onWifi) return; // skip online update if not on Wi‑Fi
+        } catch (_) {
+          return; // if we cannot determine, skip to preserve data
+        }
+      }
+
       // Prefer explicit URL if configured; otherwise try Firebase manifest.
       if (url.isEmpty) {
         final ok = await FdaFirebaseUpdater(cacheFileName: _cacheFileName).updateFromManifest();
         if (ok) {
           await loadCSVIsolatePreferCache();
           s.fdaLastUpdatedAt = DateTime.now();
+          s.fdaLastCheckedAt = DateTime.now();
           await s.save();
           return;
         }
+        s.fdaLastCheckedAt = DateTime.now();
+        await s.save();
         // If Firebase path fails, nothing else to do here.
         return;
       }
@@ -223,11 +378,14 @@ class FDAChecker {
         final ok = await updateFromUrl(url);
         if (ok) {
           s.fdaLastUpdatedAt = DateTime.now();
+          s.fdaLastCheckedAt = DateTime.now();
           await s.save();
           return;
         }
         await Future.delayed(Duration(milliseconds: 600 * (attempt + 1)));
       }
+      s.fdaLastCheckedAt = DateTime.now();
+      await s.save();
     } catch (_) {
       // Ignore network/update errors; cached data is already available
     }
@@ -243,6 +401,91 @@ class FDAChecker {
         normalized.contains('solution') ||
         normalized.contains('suspension') ||
         normalized.contains('injection');
+  }
+
+  // Parse strength cues from free text.
+  // - Collects numeric dose values normalized to mg
+  // - Collects mg-per-mL style concentration pairs normalized to (mg, ml)
+  ({Set<double> mg, Set<({double mg, double ml})> mgPerMl}) _strengthFromText(String s) {
+    final text = s.toLowerCase();
+    final mg = <double>{};
+    final pairs = <({double mg, double ml})>{};
+
+    // ignore: no_leading_underscores_for_local_identifiers
+    double _unitToMg(double value, String unit) {
+      switch (unit.toLowerCase()) {
+        case 'g':
+          return value * 1000.0;
+        case 'mcg':
+        case 'µg':
+          return value / 1000.0;
+        default: // 'mg'
+          return value;
+      }
+    }
+
+    // ignore: no_leading_underscores_for_local_identifiers
+    double? _toDouble(String x) => double.tryParse(x);
+
+    // Plain dose values: 5 mg, 0.5 g, 500 mcg
+    final reDose = RegExp(r"(\d+(?:\.\d+)?)\s*(mg|g|mcg|µg)");
+    for (final m in reDose.allMatches(text)) {
+      final v = _toDouble(m.group(1)!);
+      final u = m.group(2)!;
+      if (v != null) mg.add(_unitToMg(v, u));
+    }
+
+    // Concentrations: 250 mg/5 ml, 2 mg per 1 mL, 500 mcg/1 mL
+    final reConc = RegExp(r"(\d+(?:\.\d+)?)\s*(mg|g|mcg|µg)\s*(?:/|per)\s*(\d+(?:\.\d+)?)\s*m\s*l");
+    for (final m in reConc.allMatches(text)) {
+      final dose = _toDouble(m.group(1)!);
+      final unit = m.group(2)!;
+      final vol = _toDouble(m.group(3)!);
+      if (dose != null && vol != null && vol > 0) {
+        pairs.add((mg: _unitToMg(dose, unit), ml: vol));
+      }
+    }
+
+    return (mg: mg, mgPerMl: pairs);
+  }
+
+  bool _closeDouble(double a, double b, {double rel = 0.05, double abs = 0.05}) {
+    final diff = (a - b).abs();
+    if (diff <= abs) return true;
+    final maxab = a.abs() > b.abs() ? a.abs() : b.abs();
+    if (maxab == 0) return diff <= abs;
+    return diff / maxab <= rel;
+  }
+
+  // Extract a likely expiry date from OCR text, prioritizing tokens near EXP/EXPIRY/EXPIRATION labels.
+  DateTime? _extractLikelyExpiryDate(String raw) {
+    final text = raw.toLowerCase();
+    // Common labeled formats: EXP: 2026-05-31, EXP 05/2026, EXP 05/31/2026, EXP: 05-2026
+    final labeled = RegExp(r"\b(?:exp|expiry|expiration)\s*(?:date)?\s*[:#-]?\s*([0-9]{1,2}[\-/][0-9]{1,2}[\-/][0-9]{2,4}|[0-9]{4}[\-/][0-9]{1,2}[\-/][0-9]{1,2}|[0-9]{1,2}[\-/][0-9]{2,4})");
+    final m1 = labeled.firstMatch(text);
+    if (m1 != null) {
+      final d = _parseDate(m1.group(1));
+      if (d != null) return d;
+    }
+    // Fallback: any date-like token in the text
+    final anyDate = RegExp(r"\b(\d{1,2}[\-/]\d{1,2}[\-/]\d{2,4}|\d{4}[\-/]\d{1,2}[\-/]\d{1,2})\b");
+    final m2 = anyDate.firstMatch(text);
+    if (m2 != null) {
+      return _parseDate(m2.group(1));
+    }
+    return null;
+  }
+
+  // Extract country cue like: made in X, product of X, manufactured in X
+  String? _extractCountryCue(String raw) {
+    final text = raw.toLowerCase();
+    final m = RegExp(r"\b(?:made in|product of|manufactured in)\s+([a-z\s]{2,})\b").firstMatch(text);
+    if (m == null) return null;
+    final c = m.group(1)!.trim();
+    // Strip trailing words that are unlikely part of country
+    final clean = c.replaceAll(RegExp(r"[^a-z\s]"), "").replaceAll(RegExp(r"\s+"), " ").trim();
+    if (clean.isEmpty) return null;
+    return clean;
   }
 
   /// Fuzzy + token-based match algorithm
@@ -277,8 +520,8 @@ class FDAChecker {
       final hasSyrup = normalizedScan.contains('syrup');
 
       for (var row in _data.skip(1)) {
-        if (row.length < 17) continue;
-        final normBrand = _normalizeText(row[3]);
+        if (row.length < 2) continue;
+        final normBrand = _normalizeText(_getField(row, 'brand_name'));
         if (normBrand.isEmpty) continue;
         final brandTokens = normBrand.split(' ').where((t) => t.length >= 4).toSet();
         final overlap = brandTokens.intersection(scanTokenSet);
@@ -291,10 +534,10 @@ class FDAChecker {
         if (normalizedScan.contains(normBrand)) s += 1.2; // full brand phrase
 
         // Tie-breakers
-        final normGeneric = _normalizeText(row[2]);
-        final normStrength = _normalizeText(row[4]);
-        final normForm = _normalizeText(row[5]);
-        final normDistributor = row.length > 13 ? _normalizeText(row[13]) : '';
+        final normGeneric = _normalizeText(_getField(row, 'generic_name'));
+        final normStrength = _normalizeText(_getField(row, 'dosage_strength'));
+        final normForm = _normalizeText(_getField(row, 'dosage_form'));
+        final normDistributor = _normalizeText(_getField(row, 'distributor'));
 
         // Generic token overlap (e.g., amlodipine)
         final genTokens = normGeneric.split(' ').where((t) => t.length >= 5).toSet();
@@ -396,11 +639,11 @@ class FDAChecker {
     // Deterministic contains fallback for very common cases (e.g., amlodipine + brand)
     if (normalizedScan.contains('lodibes') && normalizedScan.contains('amlodipine')) {
       for (var row in _data.skip(1)) {
-        if (row.length < 17) continue;
-        final normBrand = _normalizeText(row[3]);
-        final normGeneric = _normalizeText(row[2]);
+        if (row.length < 2) continue;
+        final normBrand = _normalizeText(_getField(row, 'brand_name'));
+        final normGeneric = _normalizeText(_getField(row, 'generic_name'));
         if (normBrand.contains('lodibes') && normGeneric.contains('amlodipine')) {
-          debugPrint('[FDAChecker] deterministic match (lodibes+amlodipine): ${row[3]}');
+          debugPrint('[FDAChecker] deterministic match (lodibes+amlodipine): ${_getField(row, 'brand_name')}');
           final m = _buildMap(row);
           m['match_reason'] = 'Deterministic contains: brand and generic present';
           return m;
@@ -410,10 +653,10 @@ class FDAChecker {
     // If only generic is present, pick the first amlodipine entry
     if (normalizedScan.contains('amlodipine')) {
       for (var row in _data.skip(1)) {
-        if (row.length < 17) continue;
-        final normGeneric = _normalizeText(row[2]);
+        if (row.length < 2) continue;
+        final normGeneric = _normalizeText(_getField(row, 'generic_name'));
         if (normGeneric.contains('amlodipine')) {
-          debugPrint('[FDAChecker] deterministic match (amlodipine only): ${row[3]}');
+          debugPrint('[FDAChecker] deterministic match (amlodipine only): ${_getField(row, 'brand_name')}');
           final m = _buildMap(row);
           m['match_reason'] = 'Generic present';
           return m;
@@ -426,10 +669,10 @@ class FDAChecker {
     bool bestHasStrongExactMatch = false;
 
     for (var row in _data.skip(1)) {
-      if (row.length < 17) continue; // skip incomplete rows
+      if (row.length < 2) continue; // skip incomplete rows
 
-      final brand = row[3];
-      final generic = row[2];
+      final brand = _getField(row, 'brand_name');
+      final generic = _getField(row, 'generic_name');
       // Normalize brand/generic same as scanned text for consistent tokenization
       final normBrand = _normalizeText(brand);
       final normGeneric = _normalizeText(generic);
@@ -493,10 +736,10 @@ class FDAChecker {
     if (bestMatch != null) {
       final strict = SettingsService.instance.strictMatching;
       // Re-evaluate evidence on the best row to avoid false positives
-      final normBrand = _normalizeText(bestMatch[3]);
-      final normGeneric = _normalizeText(bestMatch[2]);
-      final normStrength = _normalizeText(bestMatch[4]);
-      final normForm = _normalizeText(bestMatch[5]);
+      final normBrand = _normalizeText(_getField(bestMatch, 'brand_name'));
+      final normGeneric = _normalizeText(_getField(bestMatch, 'generic_name'));
+      final normStrength = _normalizeText(_getField(bestMatch, 'dosage_strength'));
+      final normForm = _normalizeText(_getField(bestMatch, 'dosage_form'));
       final brandTokens = normBrand.split(' ').where((t) => t.isNotEmpty).toSet();
       final genericTokens = normGeneric.split(' ').where((t) => t.isNotEmpty).toSet();
       final brandHits = brandTokens.intersection(scanTokenSet).length;
@@ -543,18 +786,18 @@ class FDAChecker {
     final hasCapsule = normalizedScan.contains('capsule');
     final hasSyrup = normalizedScan.contains('syrup');
     // Reg No candidates
-    final regCandidates = _extractRegCandidates(scannedText).map(_normalizeReg).toSet();
+    final regCandidates = _extractRegCandidatesImproved(scannedText).map(_normalizeReg).toSet();
 
     for (var row in _data.skip(1)) {
-      if (row.length < 17) continue;
+      if (row.length < 2) continue;
       double s = 0.0;
 
-      final normBrand = _normalizeText(row[3]);
-      final normGeneric = _normalizeText(row[2]);
-      final normStrength = _normalizeText(row[4]);
-      final normForm = _normalizeText(row[5]);
-      final normDistributor = row.length > 13 ? _normalizeText(row[13]) : '';
-      final normReg = row.length > 1 ? _normalizeReg((row[1] ?? '').toString()) : '';
+      final normBrand = _normalizeText(_getField(row, 'brand_name'));
+      final normGeneric = _normalizeText(_getField(row, 'generic_name'));
+      final normStrength = _normalizeText(_getField(row, 'dosage_strength'));
+      final normForm = _normalizeText(_getField(row, 'dosage_form'));
+      final normDistributor = _normalizeText(_getField(row, 'distributor'));
+      final normReg = _normalizeReg(_getField(row, 'reg_no'));
 
       // If reg no present and exact match, give a huge score to bubble it up.
       if (normReg.isNotEmpty && regCandidates.contains(normReg)) {
@@ -599,8 +842,6 @@ class FDAChecker {
 
   /// Build a map for easy display in Scan Result Screen
   Map<String, String> _buildMap(List<dynamic> row) {
-    String cell(int i) => (i >= 0 && i < row.length) ? (row[i]?.toString() ?? '') : '';
-
     final Map<String, String> product = {};
 
     // Store every column as string, if present
@@ -609,16 +850,16 @@ class FDAChecker {
     }
 
     // Add friendly keys with bounds safety
-    product['reg_no'] = cell(1);
-    product['generic_name'] = cell(2);
-    product['brand_name'] = cell(3);
-    product['dosage_strength'] = cell(4);
-    product['dosage_form'] = cell(5);
-    product['manufacturer'] = cell(9);
-    product['country'] = cell(10);
-    product['distributor'] = cell(13);
-    product['issuance_date'] = cell(15);
-    product['expiry_date'] = cell(16);
+    product['reg_no'] = _getField(row, 'reg_no');
+    product['generic_name'] = _getField(row, 'generic_name');
+    product['brand_name'] = _getField(row, 'brand_name');
+    product['dosage_strength'] = _getField(row, 'dosage_strength');
+    product['dosage_form'] = _getField(row, 'dosage_form');
+    product['manufacturer'] = _getField(row, 'manufacturer');
+    product['country'] = _getField(row, 'country');
+    product['distributor'] = _getField(row, 'distributor');
+    product['issuance_date'] = _getField(row, 'issuance_date');
+    product['expiry_date'] = _getField(row, 'expiry_date');
 
     return product;
   }
@@ -684,6 +925,31 @@ class FDAChecker {
       }
       final bytes = await consolidateHttpClientResponseBytes(res);
       final csv = String.fromCharCodes(bytes);
+      // Validate before writing: parse and ensure plausible structure
+      try {
+        final parsed = const CsvToListConverter().convert(csv);
+        if (parsed.isEmpty || parsed.length < 10) {
+          debugPrint('�?O Update failed: CSV too short');
+          return false;
+        }
+        // Detect reg_no header
+        int regIdx = 1;
+        if (parsed.first.isNotEmpty) {
+          final head = parsed.first.map((e) => e.toString().toLowerCase()).toList();
+          for (int i = 0; i < head.length; i++) {
+            final h = head[i];
+            if (h.contains('reg') && (h.contains('no') || h.contains('number'))) { regIdx = i; break; }
+          }
+        }
+        final hasReg = parsed.skip(1).any((row) => regIdx < row.length && row[regIdx].toString().trim().isNotEmpty);
+        if (!hasReg) {
+          debugPrint('�?O Update failed: No registration column detected');
+          return false;
+        }
+      } catch (e) {
+        debugPrint('�?O Update validation failed: $e');
+        return false;
+      }
       final dir = await getApplicationDocumentsDirectory();
       final out = File('${dir.path}/$_cacheFileName');
       await out.writeAsString(csv, flush: true);
@@ -711,16 +977,64 @@ class FDAChecker {
       reasons.add('FDA record expired on ${product['expiry_date'] ?? ''}');
     }
 
+    // OCR expiry vs FDA expiry comparison (tolerate small differences)
+    final ocrExp = _extractLikelyExpiryDate(raw);
+    if (ocrExp != null && exp != null) {
+      final diffDays = (ocrExp.difference(exp).inDays).abs();
+      if (diffDays > 60) { // > ~2 months difference
+        reasons.add('Expiry on pack (${ocrExp.toIso8601String().split('T').first}) differs from FDA record (${product['expiry_date'] ?? ''})');
+        if (status == 'VERIFIED' && SettingsService.instance.strictMatching) status = 'ALERT';
+      }
+    }
+
+    // Plausibility: FDA issuance should not be after FDA expiry
+    final fdaIssuance = _parseDate(product['issuance_date']);
+    if (fdaIssuance != null && exp != null && fdaIssuance.isAfter(exp)) {
+      reasons.add('FDA record dates appear inconsistent (issuance after expiry)');
+    }
+
     // Reg. No. mismatch between package and FDA record
-    final cands = _extractRegCandidates(raw).map(_normalizeReg).toSet();
+    final cands = _extractRegCandidatesImproved(raw).map(_normalizeReg).toSet();
     final reg = _normalizeReg(product['reg_no'] ?? '');
     if (cands.isNotEmpty && reg.isNotEmpty && !cands.contains(reg)) {
       if (status == 'VERIFIED') status = 'ALERT';
       reasons.add('Registration number on pack differs from FDA record');
     }
 
-    // Note: We intentionally ignore dosage strength mismatches for status.
-    // The displayed strength is fetched directly from the FDA CSV.
+    // Strength/concentration comparison (robust: mg, g, mcg; mg/mL)
+    final o = _strengthFromText(raw);
+    final f = _strengthFromText(product['dosage_strength'] ?? '');
+    // Compare plain mg values
+    if (o.mg.isNotEmpty) {
+      final ok = o.mg.any((ov) => f.mg.any((fv) => _closeDouble(ov, fv, rel: 0.05, abs: 0.05)));
+      if (!ok) {
+        if (!reasons.contains('Pack strength seems different from FDA record')) {
+          reasons.add('Pack strength seems different from FDA record');
+        }
+        if (status == 'VERIFIED' && SettingsService.instance.strictMatching) status = 'ALERT';
+      }
+    }
+    // Compare concentration pairs (mg/mL)
+    if (o.mgPerMl.isNotEmpty) {
+      bool anyGood = false;
+      for (final op in o.mgPerMl) {
+        for (final fp in f.mgPerMl) {
+          final oRatio = op.mg / op.ml;
+          final fRatio = fp.mg / fp.ml;
+          if (_closeDouble(oRatio, fRatio, rel: 0.08, abs: 0.02)) {
+            anyGood = true;
+            break;
+          }
+        }
+        if (anyGood) break;
+      }
+      if (!anyGood) {
+        if (!reasons.contains('Pack concentration (mg/mL) seems different from FDA record')) {
+          reasons.add('Pack concentration (mg/mL) seems different from FDA record');
+        }
+        if (status == 'VERIFIED' && SettingsService.instance.strictMatching) status = 'ALERT';
+      }
+    }
 
     // Dosage form mismatch (tablet/capsule/syrup/cream/etc.)
     final normForm = _normalizeText(product['dosage_form'] ?? '');
@@ -755,6 +1069,36 @@ class FDAChecker {
       }
     }
 
+    // Extract explicit party names from label and cross-check
+    final parties = _extractPartyNames(raw);
+    if (parties.isNotEmpty && (normMfg.isNotEmpty || normDist.isNotEmpty)) {
+      bool anyMatch = false;
+      for (final p in parties) {
+        final pNorm = _normalizeText(p);
+        final o1 = normMfg.isNotEmpty ? _tokenOverlapCount(pNorm, normMfg) : 0;
+        final o2 = normDist.isNotEmpty ? _tokenOverlapCount(pNorm, normDist) : 0;
+        if (o1 > 0 || o2 > 0) { anyMatch = true; break; }
+      }
+      if (!anyMatch) {
+        reasons.add('Label party names differ from FDA manufacturer/distributor');
+        if (status == 'VERIFIED' && SettingsService.instance.strictMatching) status = 'ALERT';
+      }
+    }
+
+    // Country cue mismatch from label (e.g., "Made in India") vs FDA country field
+    final ocrCountry = _extractCountryCue(raw);
+    final fdaCountryRaw = product['country'] ?? '';
+    final fdaCountry = _normalizeText(fdaCountryRaw);
+    if ((ocrCountry != null && ocrCountry.isNotEmpty) && fdaCountry.isNotEmpty) {
+      String n(String s) => s.replaceAll(RegExp(r'[^a-z]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+      final o = n(ocrCountry);
+      final f = n(fdaCountry);
+      if (o.isNotEmpty && f.isNotEmpty && !o.contains(f) && !f.contains(o)) {
+        if (status == 'VERIFIED' && SettingsService.instance.strictMatching) status = 'ALERT';
+        reasons.add('Country on pack ("$ocrCountry") differs from FDA record ("$fdaCountryRaw")');
+      }
+    }
+
     return (status: status, reasons: reasons);
   }
 
@@ -763,6 +1107,7 @@ class FDAChecker {
     final v = s.trim();
     final iso = DateTime.tryParse(v);
     if (iso != null) return iso;
+    // dd/mm/yyyy or mm/dd/yyyy or yyyy-mm-dd
     final m = RegExp(r'^(\d{1,2})[\-/](\d{1,2})[\-/](\d{2,4})$').firstMatch(v);
     if (m != null) {
       final mm = int.tryParse(m.group(1)!);
@@ -771,6 +1116,34 @@ class FDAChecker {
       if (mm != null && dd != null && yy != null) {
         if (yy < 100) yy += 2000;
         return DateTime(yy, mm, dd);
+      }
+    }
+    // mm/yyyy or mm-yy (assume last day of month)
+    final my = RegExp(r'^(\d{1,2})[\-/](\d{2,4})$').firstMatch(v);
+    if (my != null) {
+      int? mm = int.tryParse(my.group(1)!);
+      int? yy = int.tryParse(my.group(2)!);
+      if (yy != null) {
+        if (yy < 100) yy += 2000;
+        if (mm != null && mm >= 1 && mm <= 12) {
+          final firstNext = (mm == 12) ? DateTime(yy + 1, 1, 1) : DateTime(yy, mm + 1, 1);
+          return firstNext.subtract(const Duration(days: 1));
+        }
+      }
+    }
+    // Mon YYYY (e.g., Jan 2026)
+    final monNames = {
+      'jan': 1,'feb': 2,'mar': 3,'apr': 4,'may': 5,'jun': 6,
+      'jul': 7,'aug': 8,'sep': 9,'sept': 9,'oct': 10,'nov': 11,'dec': 12,
+    };
+    final m2 = RegExp(r'^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{2,4})$', caseSensitive: false).firstMatch(v);
+    if (m2 != null) {
+      final mm = monNames[m2.group(1)!.toLowerCase()];
+      var yy = int.tryParse(m2.group(2)!);
+      if (mm != null && yy != null) {
+        if (yy < 100) yy += 2000;
+        final firstNext = (mm == 12) ? DateTime(yy + 1, 1, 1) : DateTime(yy, mm + 1, 1);
+        return firstNext.subtract(const Duration(days: 1));
       }
     }
     return null;
@@ -796,9 +1169,17 @@ _ParsedFdaData _parseAndIndexCsv(String rawData) {
   // Build index
   final Map<String, List<dynamic>> regIdx = {};
   String normalizeReg(String input) => input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+  int regCol = 1;
+  if (norm.isNotEmpty) {
+    final head = norm.first;
+    for (int i = 0; i < head.length; i++) {
+      final h = head[i];
+      if (h.contains('reg') && (h.contains('no') || h.contains('number'))) { regCol = i; break; }
+    }
+  }
   for (final row in norm.skip(1)) {
-    if (row.length < 2) continue;
-    final reg = row[1].toString();
+    if (row.length <= regCol) continue;
+    final reg = row[regCol].toString();
     if (reg.isEmpty) continue;
     final n = normalizeReg(reg);
     if (n.isEmpty) continue;
