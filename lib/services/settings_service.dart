@@ -14,6 +14,7 @@ class SettingsService {
   // Suggest adding another package side after a scan when OCR evidence looks incomplete
   bool smartAddSidePrompt = true;
   bool hasSeenWelcome = false;
+  bool hasSeenScopeNotice = false;
   bool isLoggedIn = false;
   bool guestMode = false;
   String? authProvider; // 'email' | 'google' | null
@@ -44,6 +45,7 @@ class SettingsService {
         wifiOnlyUpdates = (json['wifiOnlyUpdates'] ?? false) as bool;
         smartAddSidePrompt = (json['smartAddSidePrompt'] ?? true) as bool;
         hasSeenWelcome = (json['hasSeenWelcome'] ?? false) as bool;
+        hasSeenScopeNotice = (json['hasSeenScopeNotice'] ?? false) as bool;
         isLoggedIn = (json['isLoggedIn'] ?? false) as bool;
         guestMode = (json['guestMode'] ?? false) as bool;
         authProvider = json['authProvider'] as String?;
@@ -77,6 +79,7 @@ class SettingsService {
       'wifiOnlyUpdates': wifiOnlyUpdates,
       'smartAddSidePrompt': smartAddSidePrompt,
       'hasSeenWelcome': hasSeenWelcome,
+      'hasSeenScopeNotice': hasSeenScopeNotice,
       'isLoggedIn': isLoggedIn,
       'guestMode': guestMode,
       'authProvider': authProvider,

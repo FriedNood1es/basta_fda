@@ -52,10 +52,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
         }
         return;
       }
-      if (mounted) setState(() {
-        _initTried = true;
-        _authorized = true;
-      });
+      if (mounted) {
+        setState(() {
+          _initTried = true;
+          _authorized = true;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -102,7 +104,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 isDense: true,
                 border: OutlineInputBorder(),
               ),
-              onChanged: (v) => setState(() => _search = v.trim().toLowerCase()),
+              onChanged: (v) =>
+                  setState(() => _search = v.trim().toLowerCase()),
             ),
           ),
           Padding(
@@ -118,13 +121,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 ChoiceChip(
                   label: const Text('Unresolved'),
                   selected: _resolvedFilter == 'Unresolved',
-                  onSelected: (_) => setState(() => _resolvedFilter = 'Unresolved'),
+                  onSelected: (_) =>
+                      setState(() => _resolvedFilter = 'Unresolved'),
                 ),
                 const SizedBox(width: 8),
                 ChoiceChip(
                   label: const Text('Resolved'),
                   selected: _resolvedFilter == 'Resolved',
-                  onSelected: (_) => setState(() => _resolvedFilter = 'Resolved'),
+                  onSelected: (_) =>
+                      setState(() => _resolvedFilter = 'Resolved'),
                 ),
               ],
             ),
@@ -153,7 +158,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 }
 
                 // Filters
-                bool matchesResolvedFilter(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+                bool matchesResolvedFilter(
+                  QueryDocumentSnapshot<Map<String, dynamic>> doc,
+                ) {
                   final resolved = doc.data()['resolvedAt'] is Timestamp;
                   switch (_resolvedFilter) {
                     case 'Resolved':
@@ -167,11 +174,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
                 bool matchesSearch(Map<String, dynamic> d) {
                   if (_search.isEmpty) return true;
-                  final brand = (d['brand_name'] ?? '').toString().toLowerCase();
+                  final brand = (d['brand_name'] ?? '')
+                      .toString()
+                      .toLowerCase();
                   final reg = (d['reg_no'] ?? '').toString().toLowerCase();
-                  final category = (d['category'] ?? '').toString().toLowerCase();
-                  final desc = (d['description'] ?? d['reason'] ?? '').toString().toLowerCase();
-                  return brand.contains(_search) || reg.contains(_search) || category.contains(_search) || desc.contains(_search);
+                  final category = (d['category'] ?? '')
+                      .toString()
+                      .toLowerCase();
+                  final desc = (d['description'] ?? d['reason'] ?? '')
+                      .toString()
+                      .toLowerCase();
+                  return brand.contains(_search) ||
+                      reg.contains(_search) ||
+                      category.contains(_search) ||
+                      desc.contains(_search);
                 }
 
                 bool matchesCategory(Map<String, dynamic> d) {
@@ -188,7 +204,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
                 final filtered = docs.where((doc) {
                   final d = doc.data();
-                  return matchesResolvedFilter(doc) && matchesCategory(d) && matchesSearch(d);
+                  return matchesResolvedFilter(doc) &&
+                      matchesCategory(d) &&
+                      matchesSearch(d);
                 }).toList();
 
                 return Column(
@@ -204,17 +222,21 @@ class _ReportsScreenState extends State<ReportsScreen> {
                               FilterChip(
                                 label: const Text('All categories'),
                                 selected: _categoryFilter == 'All',
-                                onSelected: (_) => setState(() => _categoryFilter = 'All'),
+                                onSelected: (_) =>
+                                    setState(() => _categoryFilter = 'All'),
                               ),
                               const SizedBox(width: 8),
-                              ...categories.map((c) => Padding(
-                                    padding: const EdgeInsets.only(right: 8),
-                                    child: FilterChip(
-                                      label: Text(c),
-                                      selected: _categoryFilter == c,
-                                      onSelected: (_) => setState(() => _categoryFilter = c),
-                                    ),
-                                  )),
+                              ...categories.map(
+                                (c) => Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: FilterChip(
+                                    label: Text(c),
+                                    selected: _categoryFilter == c,
+                                    onSelected: (_) =>
+                                        setState(() => _categoryFilter = c),
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -222,42 +244,84 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     Expanded(
                       child: ListView.separated(
                         itemCount: filtered.length,
-                        separatorBuilder: (context, _) => const Divider(height: 0),
+                        separatorBuilder: (context, _) =>
+                            const Divider(height: 0),
                         itemBuilder: (context, i) {
                           final doc = filtered[i];
                           final d = doc.data();
                           final status = (d['status'] ?? '').toString();
                           final brand = (d['brand_name'] ?? '').toString();
                           final reg = (d['reg_no'] ?? '').toString();
-                          final reason = (d['description'] ?? d['reason'] ?? '').toString();
-                          final created = d['createdAt'] is Timestamp ? fmtTs(d['createdAt'] as Timestamp) : '';
+                          final reason = (d['description'] ?? d['reason'] ?? '')
+                              .toString();
+                          final created = d['createdAt'] is Timestamp
+                              ? fmtTs(d['createdAt'] as Timestamp)
+                              : '';
                           final resolved = d['resolvedAt'] is Timestamp;
-                          final titleText = (brand.isNotEmpty ? brand : reg).trim();
+                          final hasImage =
+                              (d['hasImage'] == true) ||
+                              ((d['imageUrl'] ?? '').toString().isNotEmpty);
+                          final titleText = (brand.isNotEmpty ? brand : reg)
+                              .trim();
+                          final trailingWidgets = <Widget>[];
+                          if (hasImage) {
+                            trailingWidgets.add(
+                              const Icon(Icons.photo_library_rounded, size: 20),
+                            );
+                          }
+                          if (resolved) {
+                            trailingWidgets.add(
+                              Container(
+                                margin: trailingWidgets.isNotEmpty
+                                    ? const EdgeInsets.only(left: 8)
+                                    : EdgeInsets.zero,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(
+                                    color: Colors.green.withValues(alpha: 0.3),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'RESOLVED',
+                                  style: TextStyle(
+                                    color: Colors.green,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
                           return ListTile(
                             leading: Icon(
-                              resolved ? Icons.verified_rounded : Icons.report_gmailerrorred_rounded,
+                              resolved
+                                  ? Icons.verified_rounded
+                                  : Icons.report_gmailerrorred_rounded,
                               color: resolved ? Colors.green : null,
                             ),
                             title: Text(titleText),
-                            subtitle: Text('${status.isNotEmpty ? status : 'REPORTED'}  •  $created\n$reason'),
+                            subtitle: Text(
+                              '${status.isNotEmpty ? status : 'REPORTED'} | $created\n$reason',
+                            ),
                             isThreeLine: reason.isNotEmpty,
-                            trailing: resolved
-                                ? Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: Colors.green.withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(999),
-                                      border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
-                                    ),
-                                    child: const Text('RESOLVED', style: TextStyle(color: Colors.green, fontWeight: FontWeight.w700)),
-                                  )
-                                : null,
+                            trailing: trailingWidgets.isEmpty
+                                ? null
+                                : Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: trailingWidgets,
+                                  ),
                             onTap: () async {
                               await showModalBottomSheet(
                                 context: context,
                                 isScrollControlled: true,
                                 shape: const RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                                  borderRadius: BorderRadius.vertical(
+                                    top: Radius.circular(16),
+                                  ),
                                 ),
                                 builder: (ctx) => _ReportDetailSheet(doc: doc),
                               );
@@ -327,18 +391,24 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
     final resolvedAt = d['resolvedAt'] is Timestamp
         ? (d['resolvedAt'] as Timestamp).toDate().toLocal().toString()
         : '';
+    final imageUrl = (d['imageUrl'] ?? '').toString();
+    final hasImage = imageUrl.isNotEmpty;
+    final storagePath = (d['imageStoragePath'] ?? '').toString();
 
     Widget row(String label, String value) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(width: 130, child: Text(label, style: const TextStyle(color: Colors.black54))),
-              const SizedBox(width: 8),
-              Expanded(child: Text(value.isEmpty ? '—' : value)),
-            ],
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 130,
+            child: Text(label, style: const TextStyle(color: Colors.black54)),
           ),
-        );
+          const SizedBox(width: 8),
+          Expanded(child: Text(value.isEmpty ? '—' : value)),
+        ],
+      ),
+    );
 
     return SafeArea(
       child: Padding(
@@ -356,17 +426,25 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
               Row(
                 children: [
                   Icon(
-                    resolved ? Icons.verified_rounded : Icons.report_gmailerrorred_rounded,
+                    resolved
+                        ? Icons.verified_rounded
+                        : Icons.report_gmailerrorred_rounded,
                     color: resolved ? Colors.green : Colors.redAccent,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       (d['brand_name'] ?? d['reg_no'] ?? '').toString(),
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
-                  IconButton(onPressed: () => Navigator.of(context).pop(), icon: const Icon(Icons.close_rounded)),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -377,19 +455,29 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                   OutlinedButton.icon(
                     onPressed: () async {
                       final summary = StringBuffer()
-                        ..writeln('Report: ${(d['brand_name'] ?? d['reg_no'] ?? '').toString()}')
-                        ..writeln('Status: ${(d['status'] ?? 'REPORTED').toString()}')
-                        ..writeln('Category: ${(d['category'] ?? '').toString()}')
-                        ..writeln('Description: ${(d['description'] ?? d['reason'] ?? '').toString()}')
+                        ..writeln(
+                          'Report: ${(d['brand_name'] ?? d['reg_no'] ?? '').toString()}',
+                        )
+                        ..writeln(
+                          'Status: ${(d['status'] ?? 'REPORTED').toString()}',
+                        )
+                        ..writeln(
+                          'Category: ${(d['category'] ?? '').toString()}',
+                        )
+                        ..writeln(
+                          'Description: ${(d['description'] ?? d['reason'] ?? '').toString()}',
+                        )
                         ..writeln('Reg No: ${(d['reg_no'] ?? '').toString()}')
                         ..writeln('Created: $created')
                         ..writeln(resolved ? 'Resolved: $resolvedAt' : '');
-                      await Clipboard.setData(ClipboardData(text: summary.toString()));
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Report summary copied')),
-                        );
-                      }
+                      final messenger = ScaffoldMessenger.of(context);
+                      await Clipboard.setData(
+                        ClipboardData(text: summary.toString()),
+                      );
+                      if (!mounted) return;
+                      messenger.showSnackBar(
+                        const SnackBar(content: Text('Report summary copied')),
+                      );
                     },
                     icon: const Icon(Icons.copy_rounded),
                     label: const Text('Copy summary'),
@@ -397,9 +485,62 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                 ],
               ),
               const SizedBox(height: 8),
+              if (hasImage) ...[
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: AspectRatio(
+                        aspectRatio: 16 / 9,
+                        child: Image.network(
+                          imageUrl,
+                          fit: BoxFit.cover,
+                          loadingBuilder: (context, child, progress) {
+                            if (progress == null) return child;
+                            final value = progress.expectedTotalBytes != null
+                                ? progress.cumulativeBytesLoaded /
+                                      progress.expectedTotalBytes!
+                                : null;
+                            return Center(
+                              child: SizedBox(
+                                width: 36,
+                                height: 36,
+                                child: CircularProgressIndicator(value: value),
+                              ),
+                            );
+                          },
+                          errorBuilder: (context, error, _) => Container(
+                            color: Colors.black12,
+                            alignment: Alignment.center,
+                            child: const Text('Unable to load image'),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        final messenger = ScaffoldMessenger.of(context);
+                        await Clipboard.setData(ClipboardData(text: imageUrl));
+                        if (!mounted) return;
+                        messenger.showSnackBar(
+                          const SnackBar(content: Text('Image link copied')),
+                        );
+                      },
+                      icon: const Icon(Icons.link_rounded),
+                      label: const Text('Copy image link'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+              ],
               row('Status', (d['status'] ?? 'REPORTED').toString()),
               row('Category', (d['category'] ?? '').toString()),
-              row('Description', (d['description'] ?? d['reason'] ?? '').toString()),
+              row(
+                'Description',
+                (d['description'] ?? d['reason'] ?? '').toString(),
+              ),
               const Divider(height: 24),
               row('Registration No.', (d['reg_no'] ?? '').toString()),
               row('Brand Name', (d['brand_name'] ?? '').toString()),
@@ -412,6 +553,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
               row('Contact', (d['contact'] ?? '').toString()),
               row('Reporter UID', (d['createdByUid'] ?? '').toString()),
               row('Reporter Email', (d['createdByEmail'] ?? '').toString()),
+              if (storagePath.isNotEmpty) row('Storage Path', storagePath),
               row('Created At', created),
               if (resolved) row('Resolved At', resolvedAt),
               const SizedBox(height: 12),
@@ -423,10 +565,19 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                       ? const SizedBox(
                           width: 16,
                           height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
                         )
-                      : Icon(resolved ? Icons.undo_rounded : Icons.verified_rounded),
-                  label: Text(resolved ? 'Mark as Unresolved' : 'Mark as Resolved'),
+                      : Icon(
+                          resolved
+                              ? Icons.undo_rounded
+                              : Icons.verified_rounded,
+                        ),
+                  label: Text(
+                    resolved ? 'Mark as Unresolved' : 'Mark as Resolved',
+                  ),
                 ),
               ),
             ],

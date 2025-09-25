@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show Clipboard, ClipboardData, HapticFeedback;
+import 'package:flutter/services.dart'
+    show Clipboard, ClipboardData, HapticFeedback;
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:basta_fda/services/fda_checker.dart';
@@ -17,7 +18,11 @@ class ScannerScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
   final FDAChecker fdaChecker;
 
-  const ScannerScreen({super.key, required this.cameras, required this.fdaChecker});
+  const ScannerScreen({
+    super.key,
+    required this.cameras,
+    required this.fdaChecker,
+  });
 
   @override
   State<ScannerScreen> createState() => _ScannerScreenState();
@@ -34,7 +39,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
   String _extractedText = "";
   List<String> _suggestions = [];
   Size? _imageSize;
-  final TextRecognizer _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+  final TextRecognizer _textRecognizer = TextRecognizer(
+    script: TextRecognitionScript.latin,
+  );
   Timer? _debounce;
   bool _isCapturing = false;
   bool _showExtractedExpanded = false;
@@ -42,6 +49,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   // Multi-angle capture session (accumulate OCR from multiple sides)
   final List<String> _sessionTexts = [];
   final List<String> _sessionRawTexts = [];
+  bool _scopeNoticeShown = false;
   // Nudge throttling
   DateTime? _lastNudgeAt;
   // Tap-to-focus + pinch-to-zoom
@@ -79,10 +87,71 @@ class _ScannerScreenState extends State<ScannerScreen> {
           HistoryService.instance.switchProfileKey('guest');
         }
       } catch (_) {}
+      _maybeShowScopeNotice();
     });
     // Ensure FDA data is loaded and reasonably fresh (uses cache first)
     widget.fdaChecker.ensureLoadedAndFresh().then((_) {
       if (mounted) setState(() {});
+    });
+  }
+
+  void _maybeShowScopeNotice() {
+    final settings = SettingsService.instance;
+    if (_scopeNoticeShown || settings.hasSeenScopeNotice) return;
+    _scopeNoticeShown = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || settings.hasSeenScopeNotice) return;
+      await showModalBottomSheet<bool>(
+        context: context,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (ctx) {
+          final theme = Theme.of(ctx);
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.info_outline_rounded,
+                        color: theme.colorScheme.primary,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'How bastaFDA checks products',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'We match the label text you scan against FDA registration records. We cannot confirm if packaging is genuine or tampered.',
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => Navigator.of(ctx).pop(true),
+                      child: const Text('Got it'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+      settings.hasSeenScopeNotice = true;
+      await settings.save();
     });
   }
 
@@ -102,14 +171,20 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _currentZoom = desired.clamp(_minZoom, _maxZoom);
       await _controller!.setZoomLevel(_currentZoom);
       await _controller!.setFocusMode(FocusMode.auto);
-      try { await _controller!.setExposureMode(ExposureMode.auto); } catch (_) {}
+      try {
+        await _controller!.setExposureMode(ExposureMode.auto);
+      } catch (_) {}
     } catch (_) {}
     setState(() => _isInitialized = true);
     // Do not start stream by default to avoid ImageReader buffer pressure.
   }
 
   Future<void> _startStream() async {
-    if (!mounted || _controller == null || _controller!.value.isStreamingImages) return;
+    if (!mounted ||
+        _controller == null ||
+        _controller!.value.isStreamingImages) {
+      return;
+    }
     await _controller!.startImageStream(_onImage);
   }
 
@@ -125,7 +200,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
     _debounce = Timer(const Duration(milliseconds: 350), () {});
     _isBusy = true;
 
-    _imageSize ??= Size(cameraImage.width.toDouble(), cameraImage.height.toDouble());
+    _imageSize ??= Size(
+      cameraImage.width.toDouble(),
+      cameraImage.height.toDouble(),
+    );
 
     try {
       final WriteBuffer allBytes = WriteBuffer();
@@ -134,20 +212,31 @@ class _ScannerScreenState extends State<ScannerScreen> {
       }
       final bytes = allBytes.done().buffer.asUint8List();
 
-      final imageRotation = InputImageRotationValue.fromRawValue(_controller!.description.sensorOrientation) ?? InputImageRotation.rotation0deg;
-      final format = InputImageFormatValue.fromRawValue(cameraImage.format.raw) ?? InputImageFormat.nv21;
+      final imageRotation =
+          InputImageRotationValue.fromRawValue(
+            _controller!.description.sensorOrientation,
+          ) ??
+          InputImageRotation.rotation0deg;
+      final format =
+          InputImageFormatValue.fromRawValue(cameraImage.format.raw) ??
+          InputImageFormat.nv21;
 
       final inputImage = InputImage.fromBytes(
         bytes: bytes,
         metadata: InputImageMetadata(
-          size: Size(cameraImage.width.toDouble(), cameraImage.height.toDouble()),
+          size: Size(
+            cameraImage.width.toDouble(),
+            cameraImage.height.toDouble(),
+          ),
           rotation: imageRotation,
           format: format,
           bytesPerRow: cameraImage.planes.first.bytesPerRow,
         ),
       );
 
-      final RecognizedText result = await _textRecognizer.processImage(inputImage);
+      final RecognizedText result = await _textRecognizer.processImage(
+        inputImage,
+      );
       final rawText = result.text;
       final scannedText = cleanText(rawText);
 
@@ -183,27 +272,70 @@ class _ScannerScreenState extends State<ScannerScreen> {
     if (w <= 0 || h <= 0) return cleanText(result.text);
 
     // Main ROI centered; slightly shorter to reduce noise
-    final roi = Rect.fromLTWH(minX + w * 0.2, minY + h * 0.33, w * 0.6, h * 0.30);
+    final roi = Rect.fromLTWH(
+      minX + w * 0.18,
+      minY + h * 0.30,
+      w * 0.64,
+      h * 0.34,
+    );
     // Footer strip to catch bottom lines (e.g., Reg. No.)
-    final footer = Rect.fromLTWH(minX + w * 0.15, minY + h * 0.63, w * 0.70, h * 0.22);
+    final footer = Rect.fromLTWH(
+      minX + w * 0.10,
+      minY + h * 0.54,
+      w * 0.80,
+      h * 0.38,
+    );
+    bool rectHasCoverage(Rect target, Rect box) {
+      const tolerance = 16.0;
+      final expanded = target.inflate(tolerance);
+      if (!expanded.overlaps(box)) return false;
+      final overlapLeft = expanded.left > box.left ? expanded.left : box.left;
+      final overlapTop = expanded.top > box.top ? expanded.top : box.top;
+      final overlapRight = expanded.right < box.right
+          ? expanded.right
+          : box.right;
+      final overlapBottom = expanded.bottom < box.bottom
+          ? expanded.bottom
+          : box.bottom;
+      final overlapWidth = overlapRight - overlapLeft;
+      final overlapHeight = overlapBottom - overlapTop;
+      if (overlapWidth <= 0 || overlapHeight <= 0) return false;
+      final overlapArea = overlapWidth * overlapHeight;
+      final boxArea = box.width * box.height;
+      if (boxArea <= 0) return false;
+      const minCoverage = 0.35;
+      return overlapArea >= boxArea * minCoverage;
+    }
+
     final buffer = StringBuffer();
     for (final block in result.blocks) {
       final box = block.boundingBox;
-      if (roi.overlaps(box) || footer.overlaps(box)) {
+      if (rectHasCoverage(roi, box) || rectHasCoverage(footer, box)) {
         buffer.writeln(block.text);
       }
     }
-    final focused = cleanText(buffer.toString());
-    // Fallback to full text if ROI extraction is too short
-    if (focused.split(' ').where((t) => t.isNotEmpty).length >= 2) {
+    final rawFocused = buffer.toString();
+    final focused = cleanText(rawFocused);
+    final wordCount = focused.split(' ').where((t) => t.isNotEmpty).length;
+    final fullRaw = result.text;
+
+    if (widget.fdaChecker.regCandidates(rawFocused).isNotEmpty) {
       return focused;
     }
-    return cleanText(result.text);
+    if (widget.fdaChecker.regCandidates(fullRaw).isNotEmpty) {
+      return cleanText(fullRaw);
+    }
+    if (wordCount >= 2) {
+      return focused;
+    }
+    return cleanText(fullRaw);
   }
 
   // Reliable still-shot scan used for Confirm action
   Future<String?> _scanFromPhoto() async {
-    if (!mounted || _controller == null || !_controller!.value.isInitialized) return null;
+    if (!mounted || _controller == null || !_controller!.value.isInitialized) {
+      return null;
+    }
     try {
       setState(() => _isCapturing = true);
       // Stop the stream before capture to avoid conflicts
@@ -213,7 +345,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
       try {
         final center = const Offset(0.5, 0.5);
         await _controller!.setFocusMode(FocusMode.auto);
-        try { await _controller!.setExposureMode(ExposureMode.auto); } catch (_) {}
+        try {
+          await _controller!.setExposureMode(ExposureMode.auto);
+        } catch (_) {}
         await _controller!.setFocusPoint(center);
         await _controller!.setExposurePoint(center);
         // Small settle delay for AF/AE to converge
@@ -221,11 +355,15 @@ class _ScannerScreenState extends State<ScannerScreen> {
       } catch (_) {}
 
       // Lock orientation during capture when possible to prevent rotation glitches
-      try { await _controller!.lockCaptureOrientation(); } catch (_) {}
+      try {
+        await _controller!.lockCaptureOrientation();
+      } catch (_) {}
 
       final XFile file = await _controller!.takePicture();
       final inputImage = InputImage.fromFilePath(file.path);
-      final RecognizedText result = await _textRecognizer.processImage(inputImage);
+      final RecognizedText result = await _textRecognizer.processImage(
+        inputImage,
+      );
       final rawText = result.text;
       _lastRawText = rawText;
       final scannedText = _composeTextFromResult(result);
@@ -254,7 +392,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
         if (_liveMode) {
           await _startStream();
         }
-        try { await _controller!.unlockCaptureOrientation(); } catch (_) {}
+        try {
+          await _controller!.unlockCaptureOrientation();
+        } catch (_) {}
       }
     }
   }
@@ -268,12 +408,28 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final cleanL = clean.toLowerCase();
 
     // Evidence cues
-    final hasStrength = RegExp(r"\b\d+(?:\.\d+)?\s*(mg|g|mcg)\b").hasMatch(rawL) || cleanL.contains('mg');
-    final hasForm = ['tablet','capsule','syrup','cream','ointment','solution','suspension','injection']
-        .any((t) => cleanL.contains(t));
-    final hasParty = rawL.contains('manufactured by') || rawL.contains('manufacturer') ||
-        rawL.contains('distributed by') || rawL.contains('distributor');
-    final hasExpiryCue = rawL.contains('exp') || rawL.contains('expiry') || rawL.contains('expiration');
+    final hasStrength =
+        RegExp(r"\b\d+(?:\.\d+)?\s*(mg|g|mcg)\b").hasMatch(rawL) ||
+        cleanL.contains('mg');
+    final hasForm = [
+      'tablet',
+      'capsule',
+      'syrup',
+      'cream',
+      'ointment',
+      'solution',
+      'suspension',
+      'injection',
+    ].any((t) => cleanL.contains(t));
+    final hasParty =
+        rawL.contains('manufactured by') ||
+        rawL.contains('manufacturer') ||
+        rawL.contains('distributed by') ||
+        rawL.contains('distributor');
+    final hasExpiryCue =
+        rawL.contains('exp') ||
+        rawL.contains('expiry') ||
+        rawL.contains('expiration');
 
     int cues = 0;
     if (hasStrength) cues++;
@@ -293,15 +449,20 @@ class _ScannerScreenState extends State<ScannerScreen> {
     if (!s.smartAddSidePrompt) return;
     if (!_shouldNudgeForAnotherSide(raw, clean)) return;
     final now = DateTime.now();
-    if (_lastNudgeAt != null && now.difference(_lastNudgeAt!) < const Duration(seconds: 10)) return;
+    if (_lastNudgeAt != null &&
+        now.difference(_lastNudgeAt!) < const Duration(seconds: 10)) {
+      return;
+    }
     _lastNudgeAt = now;
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     messenger.showSnackBar(
       SnackBar(
-        content: const Text('Label may be incomplete. Add another side?'),
+        content: const Text(
+          'Want better results? Save this side and scan another?',
+        ),
         action: SnackBarAction(
-          label: 'Add side',
+          label: 'Save side',
           onPressed: () {
             final cleanTxt = _extractedText.trim();
             final rawTxt = (_lastRawText ?? _extractedText).trim();
@@ -309,7 +470,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
             if (rawTxt.isNotEmpty) _sessionRawTexts.add(rawTxt);
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Side added (${_sessionRawTexts.length})')),
+                SnackBar(
+                  content: Text('Side saved (${_sessionRawTexts.length})'),
+                ),
               );
             }
           },
@@ -323,7 +486,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final List<String> collect = [];
     final imgW = _imageSize?.width ?? 1;
     final imgH = _imageSize?.height ?? 1;
-    final roi = Rect.fromLTWH(imgW * 0.2, imgH * 0.325, imgW * 0.6, imgH * 0.35);
+    final roi = Rect.fromLTWH(
+      imgW * 0.2,
+      imgH * 0.325,
+      imgW * 0.6,
+      imgH * 0.35,
+    );
     for (final block in result.blocks) {
       final box = block.boundingBox;
       if (roi.overlaps(box)) {
@@ -350,7 +518,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
     await _reviewAndSearch();
   }
 
-  Future<void> _reviewAndSearch({String? preset, bool capturePhoto = true}) async {
+  Future<void> _reviewAndSearch({
+    String? preset,
+    bool capturePhoto = true,
+  }) async {
     // Start with preset or capture a fresh still for reliable OCR
     final first = capturePhoto ? await _scanFromPhoto() : preset;
     if (!mounted) return;
@@ -385,18 +556,30 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 children: [
                   Row(
                     children: [
-                      const Text('Review Extracted Text', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      const Text(
+                        'Review Extracted Text',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                       const Spacer(),
                       IconButton(
                         icon: const Icon(Icons.copy_rounded),
                         tooltip: 'Copy',
                         onPressed: () async {
-                          await Clipboard.setData(ClipboardData(text: controller.text));
+                          await Clipboard.setData(
+                            ClipboardData(text: controller.text),
+                          );
                           if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Copied to clipboard'),
+                              ),
+                            );
                           }
                         },
-                      )
+                      ),
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -406,14 +589,57 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     minLines: 2,
                     decoration: InputDecoration(
                       hintText: 'Edit or confirm the extracted text',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                     onChanged: (v) => working = v,
                   ),
                   const SizedBox(height: 12),
                   if (regCandidates.isNotEmpty) ...[
-                    Text('Detected Reg. No.', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).hintColor)),
+                    Text(
+                      'Detected Reg. No.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).hintColor,
+                      ),
+                    ),
                     const SizedBox(height: 6),
+                    if (_sessionRawTexts.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6, bottom: 8),
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: _sessionRawTexts.asMap().entries.map((
+                              entry,
+                            ) {
+                              final idx = entry.key + 1;
+                              final sample = entry.value.trim();
+                              final preview = sample.length > 24
+                                  ? "${sample.substring(0, 24)}..."
+                                  : sample;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: Chip(
+                                  label: Text("Side $idx - $preview"),
+                                  deleteIcon: const Icon(
+                                    Icons.close_rounded,
+                                    size: 16,
+                                  ),
+                                  onDeleted: () {
+                                    setState(() {
+                                      _sessionRawTexts.removeAt(idx - 1);
+                                      if (idx - 1 < _sessionTexts.length) {
+                                        _sessionTexts.removeAt(idx - 1);
+                                      }
+                                    });
+                                  },
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
                     Wrap(
                       spacing: 8,
                       runSpacing: -6,
@@ -438,8 +664,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       const Spacer(),
                       ElevatedButton.icon(
                         onPressed: () {
+                          final edited = controller.text;
                           Navigator.of(ctx).pop();
-                          _executeSearch(working);
+                          _executeSearch(edited, rawOverride: edited);
                         },
                         icon: const Icon(Icons.search_rounded),
                         label: const Text('Use & Search'),
@@ -454,8 +681,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
       },
     );
   }
-
-  
 
   Future<void> _executeSearch(String text, {String? rawOverride}) async {
     // Show a lightweight blocking overlay while matching
@@ -472,17 +697,32 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final raw = rawOverride ?? _lastRawText ?? text;
     final byReg = widget.fdaChecker.findByRegNo(raw);
     // If a reg-like code is present but not found, avoid heuristic false positives
-    final regLike = RegExp(r"\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b").hasMatch(raw) ||
-        RegExp(r"\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b", caseSensitive: false).hasMatch(raw);
-    final matchedProduct = byReg ?? (regLike ? null : widget.fdaChecker.findProductDetailsWithExplain(text));
+    final regLike =
+        RegExp(r"\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b").hasMatch(raw) ||
+        RegExp(
+          r"\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b",
+          caseSensitive: false,
+        ).hasMatch(raw);
+    final matchedProduct =
+        byReg ??
+        (regLike
+            ? null
+            : widget.fdaChecker.findProductDetailsWithExplain(text));
     if (!mounted) return;
     if (matchedProduct != null) {
-      final eval = widget.fdaChecker.evaluateScan(raw: raw, product: matchedProduct);
+      final eval = widget.fdaChecker.evaluateScan(
+        raw: raw,
+        product: matchedProduct,
+      );
       final status = eval.status;
       if (eval.reasons.isNotEmpty) {
         matchedProduct['verification_reasons'] = eval.reasons.join('\n');
       }
-      await HistoryService.instance.addEntry(scannedText: text, productInfo: matchedProduct, status: status);
+      await HistoryService.instance.addEntry(
+        scannedText: text,
+        productInfo: matchedProduct,
+        status: status,
+      );
       if (!mounted) return;
       // Close matching overlay before navigating
       if (Navigator.canPop(context)) {
@@ -491,10 +731,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => ScanResultScreen(
-            productInfo: matchedProduct,
-            status: status,
-          ),
+          builder: (context) =>
+              ScanResultScreen(productInfo: matchedProduct, status: status),
         ),
       );
       // Clear any accumulated sides after a completed search
@@ -505,11 +743,18 @@ class _ScannerScreenState extends State<ScannerScreen> {
       if (mounted && Navigator.canPop(context)) {
         Navigator.of(context).pop();
       }
-      await HistoryService.instance.addEntry(scannedText: raw, productInfo: null, status: 'NOT FOUND');
+      await HistoryService.instance.addEntry(
+        scannedText: raw,
+        productInfo: null,
+        status: 'NOT FOUND',
+      );
       if (!mounted) return;
       final returned = await Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => NotFoundScreen(scannedText: raw, fdaChecker: widget.fdaChecker)),
+        MaterialPageRoute(
+          builder: (context) =>
+              NotFoundScreen(scannedText: raw, fdaChecker: widget.fdaChecker),
+        ),
       );
       if (!mounted) return;
       if (returned is String && returned.isNotEmpty) {
@@ -530,7 +775,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }
 
   String cleanText(String input) {
-    return input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\s]'), '').replaceAll(RegExp(r'\s+'), ' ').trim();
+    return input
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
   }
 
   @override
@@ -549,18 +798,26 @@ class _ScannerScreenState extends State<ScannerScreen> {
     }
 
     return Scaffold(
-appBar: AppBar(
+      appBar: AppBar(
         title: const Text('Scan Product'),
         actions: [
           IconButton(
             tooltip: 'History',
             icon: const Icon(Icons.history_rounded),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen())),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const HistoryScreen()),
+            ),
           ),
           IconButton(
             tooltip: 'Settings',
             icon: const Icon(Icons.settings_rounded),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(fdaChecker: widget.fdaChecker))),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => SettingsScreen(fdaChecker: widget.fdaChecker),
+              ),
+            ),
           ),
         ],
       ),
@@ -573,10 +830,18 @@ appBar: AppBar(
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTapDown: (details) async {
-                if (_controller == null || !_controller!.value.isInitialized) return;
+                if (_controller == null || !_controller!.value.isInitialized) {
+                  return;
+                }
                 final size = MediaQuery.of(context).size;
-                final dx = (details.localPosition.dx / size.width).clamp(0.0, 1.0);
-                final dy = (details.localPosition.dy / size.height).clamp(0.0, 1.0);
+                final dx = (details.localPosition.dx / size.width).clamp(
+                  0.0,
+                  1.0,
+                );
+                final dy = (details.localPosition.dy / size.height).clamp(
+                  0.0,
+                  1.0,
+                );
                 try {
                   await _controller!.setFocusMode(FocusMode.auto);
                   await _controller!.setFocusPoint(Offset(dx, dy));
@@ -593,7 +858,10 @@ appBar: AppBar(
               },
               onScaleUpdate: (details) async {
                 if (_controller == null) return;
-                final desired = (_baseZoomForScale * details.scale).clamp(_minZoom, _maxZoom);
+                final desired = (_baseZoomForScale * details.scale).clamp(
+                  _minZoom,
+                  _maxZoom,
+                );
                 if ((desired - _currentZoom).abs() > 0.01) {
                   _currentZoom = desired;
                   try {
@@ -608,7 +876,36 @@ appBar: AppBar(
           Positioned.fill(
             child: IgnorePointer(
               child: CustomPaint(
-                painter: _ReticlePainter(color: Colors.white.withValues(alpha: 0.9)),
+                painter: _ReticlePainter(
+                  color: Colors.white.withValues(alpha: 0.9),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 160,
+            child: IgnorePointer(
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const Text(
+                    'Keep the registration text inside the frame',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -619,7 +916,10 @@ appBar: AppBar(
               top: 12,
               left: 12,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.black.withValues(alpha: 0.45),
                   borderRadius: BorderRadius.circular(12),
@@ -629,10 +929,16 @@ appBar: AppBar(
                     SizedBox(
                       height: 14,
                       width: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     ),
                     SizedBox(width: 8),
-                    Text('Loading FDA data…', style: TextStyle(color: Colors.white)),
+                    Text(
+                      'Loading FDA data…',
+                      style: TextStyle(color: Colors.white),
+                    ),
                   ],
                 ),
               ),
@@ -645,24 +951,42 @@ appBar: AppBar(
               child: GestureDetector(
                 onTap: () async {
                   final messenger = ScaffoldMessenger.of(context);
-                  messenger.showSnackBar(const SnackBar(content: Text('Checking for FDA updates…')));
+                  messenger.showSnackBar(
+                    const SnackBar(content: Text('Checking for FDA updates…')),
+                  );
                   await widget.fdaChecker.ensureLoadedAndFresh();
                   if (!mounted) return;
                   setState(() {});
-                  messenger.showSnackBar(const SnackBar(content: Text('Update check complete')));
+                  messenger.showSnackBar(
+                    const SnackBar(content: Text('Update check complete')),
+                  );
                 },
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.orange.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.orange.withValues(alpha: 0.5)),
+                    border: Border.all(
+                      color: Colors.orange.withValues(alpha: 0.5),
+                    ),
                   ),
                   child: Row(
                     children: const [
-                      Icon(Icons.info_outline_rounded, color: Colors.orange, size: 16),
+                      Icon(
+                        Icons.info_outline_rounded,
+                        color: Colors.orange,
+                        size: 16,
+                      ),
                       SizedBox(width: 8),
-                      Expanded(child: Text('FDA data may be out of date. Tap to update now.', style: TextStyle(color: Colors.orange))),
+                      Expanded(
+                        child: Text(
+                          'FDA data may be out of date. Tap to update now.',
+                          style: TextStyle(color: Colors.orange),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -670,7 +994,6 @@ appBar: AppBar(
             ),
 
           // (Multi-shot overlay removed)
-
           Positioned(
             top: 12,
             right: 12,
@@ -680,7 +1003,9 @@ appBar: AppBar(
               onTap: () async {
                 try {
                   _torchOn = !_torchOn;
-                  await _controller!.setFlashMode(_torchOn ? FlashMode.torch : FlashMode.off);
+                  await _controller!.setFlashMode(
+                    _torchOn ? FlashMode.torch : FlashMode.off,
+                  );
                   setState(() {});
                 } catch (_) {}
               },
@@ -688,7 +1013,10 @@ appBar: AppBar(
           ),
 
           // Focus ring indicator (briefly shown)
-          if (_lastFocusTap != null && _lastFocusAt != null && DateTime.now().difference(_lastFocusAt!) < const Duration(seconds: 2))
+          if (_lastFocusTap != null &&
+              _lastFocusAt != null &&
+              DateTime.now().difference(_lastFocusAt!) <
+                  const Duration(seconds: 2))
             Positioned(
               left: _lastFocusTap!.dx - 22,
               top: _lastFocusTap!.dy - 22,
@@ -707,24 +1035,46 @@ appBar: AppBar(
             left: 0,
             right: 0,
             bottom: 0,
-              child: Container(
+            child: Container(
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.92),
-                border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                boxShadow: const [BoxShadow(blurRadius: 12, color: Colors.black26)],
+                color: Theme.of(
+                  context,
+                ).colorScheme.surface.withValues(alpha: 0.92),
+                border: Border(
+                  top: BorderSide(color: Theme.of(context).dividerColor),
+                ),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(16),
+                ),
+                boxShadow: const [
+                  BoxShadow(blurRadius: 12, color: Colors.black26),
+                ],
               ),
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'Keep the label text inside the frame. We match it to FDA records, but you should still inspect for tampering.',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ),
                   // Extracted text viewer (cleaned), with copy and expand controls
                   if (_extractedText.isNotEmpty) ...[
                     Card(
                       margin: const EdgeInsets.only(bottom: 8),
                       color: Theme.of(context).colorScheme.surface,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                       child: Padding(
                         padding: const EdgeInsets.all(10),
                         child: Column(
@@ -732,27 +1082,56 @@ appBar: AppBar(
                           children: [
                             Row(
                               children: [
-                                Text('Extracted Text', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600)),
+                                Text(
+                                  'Extracted Text',
+                                  style: Theme.of(context).textTheme.titleSmall
+                                      ?.copyWith(fontWeight: FontWeight.w600),
+                                ),
                                 const Spacer(),
                                 IconButton(
-                                  icon: const Icon(Icons.copy_rounded, size: 18),
+                                  icon: const Icon(
+                                    Icons.copy_rounded,
+                                    size: 18,
+                                  ),
                                   tooltip: 'Copy',
                                   onPressed: () async {
-                                    await Clipboard.setData(ClipboardData(text: _extractedText));
+                                    await Clipboard.setData(
+                                      ClipboardData(text: _extractedText),
+                                    );
                                     if (context.mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Extracted text copied')));
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Extracted text copied',
+                                          ),
+                                        ),
+                                      );
                                     }
                                   },
                                 ),
                                 IconButton(
-                                  icon: Icon(_showExtractedExpanded ? Icons.expand_less_rounded : Icons.expand_more_rounded, size: 20),
-                                  tooltip: _showExtractedExpanded ? 'Collapse' : 'Expand',
-                                  onPressed: () => setState(() => _showExtractedExpanded = !_showExtractedExpanded),
+                                  icon: Icon(
+                                    _showExtractedExpanded
+                                        ? Icons.expand_less_rounded
+                                        : Icons.expand_more_rounded,
+                                    size: 20,
+                                  ),
+                                  tooltip: _showExtractedExpanded
+                                      ? 'Collapse'
+                                      : 'Expand',
+                                  onPressed: () => setState(
+                                    () => _showExtractedExpanded =
+                                        !_showExtractedExpanded,
+                                  ),
                                 ),
                               ],
                             ),
                             AnimatedCrossFade(
-                              crossFadeState: _showExtractedExpanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                              crossFadeState: _showExtractedExpanded
+                                  ? CrossFadeState.showSecond
+                                  : CrossFadeState.showFirst,
                               duration: const Duration(milliseconds: 180),
                               firstChild: Text(
                                 _extractedText,
@@ -761,9 +1140,16 @@ appBar: AppBar(
                                 style: Theme.of(context).textTheme.bodyMedium,
                               ),
                               secondChild: ConstrainedBox(
-                                constraints: const BoxConstraints(maxHeight: 120),
+                                constraints: const BoxConstraints(
+                                  maxHeight: 120,
+                                ),
                                 child: SingleChildScrollView(
-                                  child: Text(_extractedText, style: Theme.of(context).textTheme.bodyMedium),
+                                  child: Text(
+                                    _extractedText,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodyMedium,
+                                  ),
                                 ),
                               ),
                             ),
@@ -782,72 +1168,139 @@ appBar: AppBar(
                         showCheckmark: false,
                         onSelected: (_) {
                           setState(() {
-                            _extractedText = (_extractedText.isEmpty ? t : '$_extractedText $t');
+                            _extractedText = (_extractedText.isEmpty
+                                ? t
+                                : '$_extractedText $t');
                           });
                         },
                       );
                     }).toList(),
                   ),
+
                   const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      // Add side to accumulate more text from other faces of the packaging
-                      if (widget.fdaChecker.isLoaded)
-                        OutlinedButton.icon(
-                          onPressed: _isCapturing
-                              ? null
-                              : () {
-                                  final clean = _extractedText.trim();
-                                  final raw = (_lastRawText ?? _extractedText).trim();
-                                  if (clean.isNotEmpty) _sessionTexts.add(clean);
-                                  if (raw.isNotEmpty) _sessionRawTexts.add(raw);
-                                  if (context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Side added (${_sessionRawTexts.length})')),
-                                    );
-                                  }
-                                },
-                          icon: const Icon(Icons.add_photo_alternate_rounded),
-                          label: const Text('Add side'),
-                        ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: _isCapturing || !widget.fdaChecker.isLoaded
-                              ? null
-                              : () {
-                                  // If multiple sides were added, combine them for a single robust search
-                                  if (_sessionRawTexts.isNotEmpty || _sessionTexts.isNotEmpty) {
-                                    final combinedRaw = ([..._sessionRawTexts, _lastRawText ?? '']
-                                            .where((s) => s.trim().isNotEmpty)
-                                            .join(' '))
-                                        .trim();
-                                    final combinedClean = ([..._sessionTexts, _extractedText]
-                                            .where((s) => s.trim().isNotEmpty)
-                                            .join(' '))
-                                        .trim();
-                                    final wantsReview = SettingsService.instance.reviewBeforeSearch;
-                                    if (wantsReview) {
-                                      _reviewAndSearch(preset: combinedClean, capturePhoto: false);
-                                    } else {
-                                      _executeSearch(combinedClean, rawOverride: combinedRaw);
-                                    }
-                                  } else {
-                                    _matchScannedText();
-                                  }
-                                },
-                          child: _isCapturing
-                              ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                              : Text(widget.fdaChecker.isLoaded ? 'Confirm' : 'Loading…'),
+                  if (widget.fdaChecker.isLoaded)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Text(
+                        'Optional: add another side after rotating the packaging to boost matching accuracy.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withValues(alpha: 0.7),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
                   if (_sessionRawTexts.isNotEmpty)
                     Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text('Sides added: ${_sessionRawTexts.length}', style: Theme.of(context).textTheme.bodySmall),
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: _sessionRawTexts.asMap().entries.map((
+                            entry,
+                          ) {
+                            final idx = entry.key + 1;
+                            final sample = entry.value.trim();
+                            final preview = sample.length > 24
+                                ? "${sample.substring(0, 24)}..."
+                                : sample;
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: Chip(
+                                label: Text("Side $idx - $preview"),
+                                deleteIcon: const Icon(
+                                  Icons.close_rounded,
+                                  size: 16,
+                                ),
+                                onDeleted: () {
+                                  setState(() {
+                                    _sessionRawTexts.removeAt(idx - 1);
+                                    if (idx - 1 < _sessionTexts.length) {
+                                      _sessionTexts.removeAt(idx - 1);
+                                    }
+                                  });
+                                },
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
                     ),
+                  if (widget.fdaChecker.isLoaded)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: _isCapturing
+                            ? null
+                            : () {
+                                final clean = _extractedText.trim();
+                                final raw = (_lastRawText ?? _extractedText)
+                                    .trim();
+                                if (clean.isNotEmpty) _sessionTexts.add(clean);
+                                if (raw.isNotEmpty) _sessionRawTexts.add(raw);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Side saved (${_sessionRawTexts.length}). Rotate and scan the next face.',
+                                      ),
+                                    ),
+                                  );
+                                }
+                              },
+                        icon: const Icon(Icons.cameraswitch_rounded),
+                        label: const Text('Save this side (optional)'),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: _isCapturing || !widget.fdaChecker.isLoaded
+                          ? null
+                          : () {
+                              if (_sessionRawTexts.isNotEmpty ||
+                                  _sessionTexts.isNotEmpty) {
+                                final combinedRaw =
+                                    ([..._sessionRawTexts, _lastRawText ?? '']
+                                            .where((s) => s.trim().isNotEmpty)
+                                            .join(' '))
+                                        .trim();
+                                final combinedClean =
+                                    ([..._sessionTexts, _extractedText]
+                                            .where((s) => s.trim().isNotEmpty)
+                                            .join(' '))
+                                        .trim();
+                                final wantsReview =
+                                    SettingsService.instance.reviewBeforeSearch;
+                                if (wantsReview) {
+                                  _reviewAndSearch(
+                                    preset: combinedClean,
+                                    capturePhoto: false,
+                                  );
+                                } else {
+                                  _executeSearch(
+                                    combinedClean,
+                                    rawOverride: combinedRaw,
+                                  );
+                                }
+                              } else {
+                                _matchScannedText();
+                              }
+                            },
+                      child: _isCapturing
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text(
+                              widget.fdaChecker.isLoaded
+                                  ? 'Confirm'
+                                  : 'Loading...',
+                            ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -858,7 +1311,11 @@ appBar: AppBar(
   }
 }
 
-Widget _roundIconButton({required IconData icon, required VoidCallback onTap, String? tooltip}) {
+Widget _roundIconButton({
+  required IconData icon,
+  required VoidCallback onTap,
+  String? tooltip,
+}) {
   return Material(
     color: Colors.black.withValues(alpha: 0.35),
     shape: const CircleBorder(),
@@ -889,7 +1346,12 @@ class _MatchingDialog extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2.4),
             ),
             const SizedBox(width: 14),
-            Text('Matching product…', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+            Text(
+              'Matching product…',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ],
         ),
       ),
@@ -920,17 +1382,49 @@ class _ReticlePainter extends CustomPainter {
     // Corner accents
     const corner = 18.0;
     // top-left
-    canvas.drawLine(rect.topLeft, rect.topLeft + const Offset(corner, 0), paint);
-    canvas.drawLine(rect.topLeft, rect.topLeft + const Offset(0, corner), paint);
+    canvas.drawLine(
+      rect.topLeft,
+      rect.topLeft + const Offset(corner, 0),
+      paint,
+    );
+    canvas.drawLine(
+      rect.topLeft,
+      rect.topLeft + const Offset(0, corner),
+      paint,
+    );
     // top-right
-    canvas.drawLine(rect.topRight, rect.topRight + const Offset(-corner, 0), paint);
-    canvas.drawLine(rect.topRight, rect.topRight + const Offset(0, corner), paint);
+    canvas.drawLine(
+      rect.topRight,
+      rect.topRight + const Offset(-corner, 0),
+      paint,
+    );
+    canvas.drawLine(
+      rect.topRight,
+      rect.topRight + const Offset(0, corner),
+      paint,
+    );
     // bottom-left
-    canvas.drawLine(rect.bottomLeft, rect.bottomLeft + const Offset(corner, 0), paint);
-    canvas.drawLine(rect.bottomLeft, rect.bottomLeft + const Offset(0, -corner), paint);
+    canvas.drawLine(
+      rect.bottomLeft,
+      rect.bottomLeft + const Offset(corner, 0),
+      paint,
+    );
+    canvas.drawLine(
+      rect.bottomLeft,
+      rect.bottomLeft + const Offset(0, -corner),
+      paint,
+    );
     // bottom-right
-    canvas.drawLine(rect.bottomRight, rect.bottomRight + const Offset(-corner, 0), paint);
-    canvas.drawLine(rect.bottomRight, rect.bottomRight + const Offset(0, -corner), paint);
+    canvas.drawLine(
+      rect.bottomRight,
+      rect.bottomRight + const Offset(-corner, 0),
+      paint,
+    );
+    canvas.drawLine(
+      rect.bottomRight,
+      rect.bottomRight + const Offset(0, -corner),
+      paint,
+    );
   }
 
   @override
