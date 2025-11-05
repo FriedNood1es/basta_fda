@@ -250,6 +250,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           final doc = filtered[i];
                           final d = doc.data();
                           final status = (d['status'] ?? '').toString();
+                          final statusNormalized = status.trim().toUpperCase();
                           final brand = (d['brand_name'] ?? '').toString();
                           final reg = (d['reg_no'] ?? '').toString();
                           final reason = (d['description'] ?? d['reason'] ?? '')
@@ -296,16 +297,26 @@ class _ReportsScreenState extends State<ReportsScreen> {
                               ),
                             );
                           }
+                          IconData leadingIcon;
+                          Color? leadingColor;
+                          if (statusNormalized == 'RECOGNIZED') {
+                            leadingIcon = Icons.verified_rounded;
+                            leadingColor = Colors.green;
+                          } else if (statusNormalized == 'UNRECOGNIZED' ||
+                              statusNormalized == 'NOT FOUND') {
+                            leadingIcon = Icons.report_gmailerrorred_rounded;
+                            leadingColor = Colors.redAccent;
+                          } else {
+                            leadingIcon = resolved
+                                ? Icons.task_alt_rounded
+                                : Icons.help_outline_rounded;
+                            leadingColor = resolved ? Colors.green : null;
+                          }
                           return ListTile(
-                            leading: Icon(
-                              resolved
-                                  ? Icons.verified_rounded
-                                  : Icons.report_gmailerrorred_rounded,
-                              color: resolved ? Colors.green : null,
-                            ),
+                            leading: Icon(leadingIcon, color: leadingColor),
                             title: Text(titleText),
                             subtitle: Text(
-                              '${status.isNotEmpty ? status : 'REPORTED'} | $created\n$reason',
+                              '${statusNormalized.isNotEmpty ? statusNormalized : 'REPORTED'} | $created\n$reason',
                             ),
                             isThreeLine: reason.isNotEmpty,
                             trailing: trailingWidgets.isEmpty
@@ -385,6 +396,22 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
   Widget build(BuildContext context) {
     final d = widget.doc.data();
     final resolved = d['resolvedAt'] is Timestamp;
+    final status = (d['status'] ?? '').toString();
+    final statusNormalized = status.trim().toUpperCase();
+    IconData headerIcon;
+    Color? headerColor;
+    if (statusNormalized == 'RECOGNIZED') {
+      headerIcon = Icons.verified_rounded;
+      headerColor = Colors.green;
+    } else if (statusNormalized == 'UNRECOGNIZED' ||
+        statusNormalized == 'NOT FOUND') {
+      headerIcon = Icons.report_gmailerrorred_rounded;
+      headerColor = Colors.redAccent;
+    } else {
+      headerIcon =
+          resolved ? Icons.task_alt_rounded : Icons.help_outline_rounded;
+      headerColor = resolved ? Colors.green : null;
+    }
     final created = d['createdAt'] is Timestamp
         ? (d['createdAt'] as Timestamp).toDate().toLocal().toString()
         : '';
@@ -425,12 +452,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
             children: [
               Row(
                 children: [
-                  Icon(
-                    resolved
-                        ? Icons.verified_rounded
-                        : Icons.report_gmailerrorred_rounded,
-                    color: resolved ? Colors.green : Colors.redAccent,
-                  ),
+                  Icon(headerIcon, color: headerColor),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -459,7 +481,8 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                           'Report: ${(d['brand_name'] ?? d['reg_no'] ?? '').toString()}',
                         )
                         ..writeln(
-                          'Status: ${(d['status'] ?? 'REPORTED').toString()}',
+                      'Status: ${(d['status'] ?? 'REPORTED').toString()}',
+                          'Status: ${statusNormalized.isNotEmpty ? statusNormalized : 'REPORTED'}',
                         )
                         ..writeln(
                           'Category: ${(d['category'] ?? '').toString()}',
@@ -535,7 +558,10 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                 ),
                 const SizedBox(height: 8),
               ],
-              row('Status', (d['status'] ?? 'REPORTED').toString()),
+              row(
+                'Status',
+                statusNormalized.isNotEmpty ? statusNormalized : 'REPORTED',
+              ),
               row('Category', (d['category'] ?? '').toString()),
               row(
                 'Description',

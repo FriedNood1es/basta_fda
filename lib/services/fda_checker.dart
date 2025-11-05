@@ -1128,6 +1128,20 @@ class FDAChecker {
     return m;
   }
 
+  Future<Map<String, String>?> findProductDetailsAsync(
+    String scannedText,
+  ) async {
+    return Future<Map<String, String>?>(() => findProductDetails(scannedText));
+  }
+
+  Future<Map<String, String>?> findProductDetailsWithExplainAsync(
+    String scannedText,
+  ) async {
+    return Future<Map<String, String>?>(
+      () => findProductDetailsWithExplain(scannedText),
+    );
+  }
+
   /// Load FDA CSV preferring a cached file stored in app documents.
   Future<void> loadCSVIsolatePreferCache() async {
     try {
@@ -1215,12 +1229,12 @@ class FDAChecker {
   }
 
   /// Evaluate matched product against raw OCR to produce a status and reasons.
-  /// Status: VERIFIED | EXPIRED | ALERT
+  /// Status: RECOGNIZED | EXPIRED | UNRECOGNIZED
   ({String status, List<String> reasons}) evaluateScan({
     required String raw,
     required Map<String, String> product,
   }) {
-    String status = 'VERIFIED';
+    String status = 'RECOGNIZED';
     final reasons = <String>[];
 
     // Expiry
@@ -1239,8 +1253,8 @@ class FDAChecker {
         reasons.add(
           'Expiry on pack (${ocrExp.toIso8601String().split('T').first}) differs from FDA record (${product['expiry_date'] ?? ''})',
         );
-        if (status == 'VERIFIED' && SettingsService.instance.strictMatching) {
-          status = 'ALERT';
+        if (status == 'RECOGNIZED' && SettingsService.instance.strictMatching) {
+          status = 'UNRECOGNIZED';
         }
       }
     }
@@ -1267,7 +1281,7 @@ class FDAChecker {
     if (candidateMap.isNotEmpty &&
         reg.isNotEmpty &&
         !candidateMap.containsKey(reg)) {
-      if (status == 'VERIFIED') status = 'ALERT';
+      if (status == 'RECOGNIZED') status = 'UNRECOGNIZED';
       final display = candidateMap.values.take(2).join(', ');
       final regDisplay = product['reg_no'] ?? '';
       reasons.add(
@@ -1291,8 +1305,8 @@ class FDAChecker {
         )) {
           reasons.add('Pack strength seems different from FDA record');
         }
-        if (status == 'VERIFIED' && SettingsService.instance.strictMatching) {
-          status = 'ALERT';
+        if (status == 'RECOGNIZED' && SettingsService.instance.strictMatching) {
+          status = 'UNRECOGNIZED';
         }
       }
     }
@@ -1318,8 +1332,8 @@ class FDAChecker {
             'Pack concentration (mg/mL) seems different from FDA record',
           );
         }
-        if (status == 'VERIFIED' && SettingsService.instance.strictMatching) {
-          status = 'ALERT';
+        if (status == 'RECOGNIZED' && SettingsService.instance.strictMatching) {
+          status = 'UNRECOGNIZED';
         }
       }
     }
@@ -1342,7 +1356,7 @@ class FDAChecker {
       orElse: () => '',
     );
     if (cueInPack.isNotEmpty && !normForm.contains(cueInPack)) {
-      if (status == 'VERIFIED') status = 'ALERT';
+      if (status == 'RECOGNIZED') status = 'UNRECOGNIZED';
       reasons.add(
         'Dosage form on pack appears "$cueInPack" but FDA record differs',
       );
@@ -1370,7 +1384,7 @@ class FDAChecker {
       // Only escalate if BOTH appear different; otherwise keep as informational note
       if (mfgLooksDifferent && distLooksDifferent) {
         final strict = SettingsService.instance.strictMatching;
-        if (status == 'VERIFIED' && strict) status = 'ALERT';
+        if (status == 'RECOGNIZED' && strict) status = 'UNRECOGNIZED';
         reasons.add(
           'Manufacturer/distributor on pack seems different from FDA record',
         );
@@ -1396,8 +1410,8 @@ class FDAChecker {
         reasons.add(
           'Label party names differ from FDA manufacturer/distributor',
         );
-        if (status == 'VERIFIED' && SettingsService.instance.strictMatching) {
-          status = 'ALERT';
+        if (status == 'RECOGNIZED' && SettingsService.instance.strictMatching) {
+          status = 'UNRECOGNIZED';
         }
       }
     }
@@ -1415,8 +1429,8 @@ class FDAChecker {
       final o = n(ocrCountry);
       final f = n(fdaCountry);
       if (o.isNotEmpty && f.isNotEmpty && !o.contains(f) && !f.contains(o)) {
-        if (status == 'VERIFIED' && SettingsService.instance.strictMatching) {
-          status = 'ALERT';
+        if (status == 'RECOGNIZED' && SettingsService.instance.strictMatching) {
+          status = 'UNRECOGNIZED';
         }
         reasons.add(
           'Country on pack ("$ocrCountry") differs from FDA record ("$fdaCountryRaw")',

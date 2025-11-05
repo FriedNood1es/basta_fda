@@ -252,7 +252,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               child: const Text('Create account'),
                             ),
                             const SizedBox(width: 6),
-                            const Text('•'),
+                            const Text('\u2022'),
                             const SizedBox(width: 6),
                             TextButton(
                               onPressed: () async {

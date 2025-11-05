@@ -172,13 +172,13 @@ class ScanResultScreen extends StatelessWidget {
 
     Color statusColor(String status, ThemeData theme) {
       switch (status.toUpperCase()) {
-        case 'VERIFIED':
+        case 'RECOGNIZED':
           return Colors.green.shade600;
 
         case 'EXPIRED':
           return Colors.orange.shade700;
 
-        case 'ALERT':
+        case 'UNRECOGNIZED':
           return theme.colorScheme.error;
 
         case 'NOT FOUND':
@@ -194,7 +194,10 @@ class ScanResultScreen extends StatelessWidget {
     final primary = theme.colorScheme.primary;
 
     final regNo = upperOrNA(productInfo['reg_no']);
-
+    final imageProduct = productInfo['image_product'] ?? '';
+    final imageCategory = productInfo['image_category'] ?? '';
+    final imageConfidence = productInfo['image_confidence'] ?? '';
+    final imageSource = productInfo['image_source'] ?? '';
     final sColor = statusColor(status, theme);
 
     return Scaffold(
@@ -339,6 +342,14 @@ class ScanResultScreen extends StatelessWidget {
                     ),
 
                     _DetailRow(
+                      icon: Icons.category_rounded,
+
+                      label: 'Category',
+
+                      value: titleCase(productInfo['category']),
+                    ),
+
+                    _DetailRow(
                       icon: Icons.speed_rounded,
 
                       label: 'Dosage Strength',
@@ -385,6 +396,37 @@ class ScanResultScreen extends StatelessWidget {
             ),
 
             const SizedBox(height: 20),
+
+            if (imageProduct.isNotEmpty ||
+                imageCategory.isNotEmpty ||
+                imageConfidence.isNotEmpty ||
+                imageSource.isNotEmpty) ...[
+              Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: ListTile(
+                  leading: const Icon(Icons.image_search_rounded),
+                  title: Text(
+                    imageProduct.isNotEmpty ? imageProduct : 'Image model preview',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (imageCategory.isNotEmpty)
+                        Text('Category: ${titleCase(imageCategory)}'),
+                      if (imageConfidence.isNotEmpty)
+                        Text('Confidence: $imageConfidence'),
+                      if (imageSource.isNotEmpty)
+                        Text('Source: $imageSource'),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
 
             // Why it matched (if available)
             if ((productInfo['match_reason'] ?? '').isNotEmpty) ...[
@@ -440,7 +482,7 @@ class ScanResultScreen extends StatelessWidget {
               const SizedBox(height: 20),
             ],
 
-            // Why this status (e.g., EXPIRED or ALERT)
+            // Why this status (e.g., EXPIRED or UNRECOGNIZED)
             if ((productInfo['verification_reasons'] ?? '').isNotEmpty) ...[
               Card(
                 elevation: 0,
@@ -734,7 +776,7 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
       if (savedCat == null || savedCat.isEmpty) {
         if (s == 'EXPIRED') {
           initial = 'Expired in market';
-        } else if (s == 'ALERT') {
+        } else if (s == 'UNRECOGNIZED') {
           initial = 'Counterfeit';
         }
       }

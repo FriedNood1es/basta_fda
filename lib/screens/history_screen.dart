@@ -75,13 +75,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
               itemBuilder: (context, i) {
                 final e = items[i];
                 final brand = e.productInfo?['brand_name'];
-                final title = brand != null && brand.isNotEmpty ? brand : e.scannedText;
+                final imageLabel = e.imageInfo?['product'];
+                final title = brand != null && brand.isNotEmpty
+                    ? brand
+                    : (imageLabel != null && imageLabel.isNotEmpty
+                        ? '[Image] $imageLabel'
+                        : e.scannedText);
                 String two(int n) => n.toString().padLeft(2, '0');
                 final t = e.timestamp.toLocal();
                 final ts = '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
                 return ListTile(
                   title: Text(title),
-                  subtitle: Text('${e.status} • $ts'),
+                  subtitle: Text('${e.status} - $ts'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () {
                     if (e.productInfo != null) {
@@ -92,7 +97,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         ),
                       );
                     } else {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => NotFoundScreen(scannedText: e.scannedText)));
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => NotFoundScreen(
+                            scannedText: e.scannedText,
+                            imageInfo: e.imageInfo,
+                          ),
+                        ),
+                      );
                     }
                   },
                 );

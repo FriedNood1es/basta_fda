@@ -5,8 +5,14 @@ import 'package:basta_fda/screens/scan_result_screen.dart';
 class NotFoundScreen extends StatefulWidget {
   final String scannedText;
   final FDAChecker? fdaChecker;
+  final Map<String, String>? imageInfo;
 
-  const NotFoundScreen({super.key, required this.scannedText, this.fdaChecker});
+  const NotFoundScreen({
+    super.key,
+    required this.scannedText,
+    this.fdaChecker,
+    this.imageInfo,
+  });
 
   @override
   State<NotFoundScreen> createState() => _NotFoundScreenState();
@@ -84,6 +90,27 @@ class _NotFoundScreenState extends State<NotFoundScreen> {
               ),
             ),
           ),
+          if (widget.imageInfo != null) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Image recognition (preview)',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.image_search_rounded),
+                title: Text(widget.imageInfo?['product'] ?? 'Unrecognized product'),
+                subtitle: Text(
+                  'Category: ${widget.imageInfo?['category'] ?? 'unknown'}'
+                  '\nConfidence: ${(widget.imageInfo?['confidence'] ?? '--')}'
+                  '\nSource: ${widget.imageInfo?['source'] ?? 'n/a'}',
+                ),
+              ),
+            ),
+          ],
           if (_suggestions.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(
@@ -99,7 +126,7 @@ class _NotFoundScreenState extends State<NotFoundScreen> {
                   : p['brand_name']!;
               final strength = (p['dosage_strength'] ?? '').isEmpty
                   ? ''
-                  : ' • ${p['dosage_strength']!}';
+                  : ' - ${p['dosage_strength']!}';
               return Card(
                 child: ListTile(
                   leading: const Icon(Icons.medication_rounded),
@@ -112,7 +139,7 @@ class _NotFoundScreenState extends State<NotFoundScreen> {
                       MaterialPageRoute(
                         builder: (_) => ScanResultScreen(
                           productInfo: p,
-                          status: 'VERIFIED',
+                          status: 'RECOGNIZED',
                         ),
                       ),
                     );

@@ -6,13 +6,15 @@ class HistoryEntry {
   final DateTime timestamp;
   final String scannedText;
   final Map<String, String>? productInfo; // null when not found
-  final String status; // e.g., VERIFIED / NOT FOUND / EXPIRED
+  final String status; // e.g., RECOGNIZED / NOT FOUND / EXPIRED
+  final Map<String, String>? imageInfo;
 
   HistoryEntry({
     required this.timestamp,
     required this.scannedText,
     required this.productInfo,
     required this.status,
+    this.imageInfo,
   });
 
   Map<String, dynamic> toJson() => {
@@ -20,6 +22,7 @@ class HistoryEntry {
         'scannedText': scannedText,
         'productInfo': productInfo,
         'status': status,
+        'imageInfo': imageInfo,
       };
 
   static HistoryEntry fromJson(Map<String, dynamic> json) => HistoryEntry(
@@ -27,6 +30,7 @@ class HistoryEntry {
         scannedText: (json['scannedText'] ?? '') as String,
         productInfo: (json['productInfo'] as Map?)?.cast<String, String>(),
         status: (json['status'] ?? '') as String,
+        imageInfo: (json['imageInfo'] as Map?)?.cast<String, String>(),
       );
 }
 
@@ -117,9 +121,22 @@ class HistoryService {
     await load();
   }
 
-  Future<void> addEntry({required String scannedText, required Map<String, String>? productInfo, required String status}) async {
+  Future<void> addEntry({
+    required String scannedText,
+    required Map<String, String>? productInfo,
+    required String status,
+    Map<String, String>? imageInfo,
+  }) async {
     await load();
-    _entries.add(HistoryEntry(timestamp: DateTime.now(), scannedText: scannedText, productInfo: productInfo, status: status));
+    _entries.add(
+      HistoryEntry(
+        timestamp: DateTime.now(),
+        scannedText: scannedText,
+        productInfo: productInfo,
+        status: status,
+        imageInfo: imageInfo,
+      ),
+    );
     await _persist();
   }
 

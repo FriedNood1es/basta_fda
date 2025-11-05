@@ -11,6 +11,7 @@ import 'package:basta_fda/screens/not_found_screen.dart';
 import 'package:basta_fda/screens/history_screen.dart';
 import 'package:basta_fda/screens/settings_screen.dart';
 import 'package:basta_fda/services/history_service.dart';
+import 'package:basta_fda/services/mock_image_classifier.dart';
 import 'package:basta_fda/services/settings_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -33,6 +34,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   bool _isInitialized = false;
   // Removed _streaming flag (was unused)
   bool _isBusy = false;
+  bool _isMatching = false;
   final bool _paused = false;
   bool _torchOn = false;
   bool _liveMode = false; // Lens-like live OCR (off by default)
@@ -59,6 +61,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
   double _maxZoom = 1.0;
   double _currentZoom = 1.0;
   double _baseZoomForScale = 1.0;
+  final MockImageClassifier _imageClassifier =
+      MockImageClassifier.instance;
 
   @override
   void initState() {
@@ -535,7 +539,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
-        final controller = TextEditingController(text: working);
         // Detect Reg. No. candidates from raw or current text
         final rawForReg = _lastRawText ?? working;
         final regCandidates = widget.fdaChecker.regCandidates(rawForReg);
@@ -557,51 +560,63 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   Row(
                     children: [
                       const Text(
-                        'Review Extracted Text',
+                        'Choose Registration Number',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
                       const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.copy_rounded),
-                        tooltip: 'Copy',
-                        onPressed: () async {
-                          await Clipboard.setData(
-                            ClipboardData(text: controller.text),
-                          );
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Copied to clipboard'),
-                              ),
+                      if (regCandidates.isNotEmpty)
+                        FilledButton.tonalIcon(
+                          onPressed: () async {
+                            final selected = await showDialog<String>(
+                              context: context,
+                              builder: (dialogCtx) {
+                                final manualController =
+                                    TextEditingController(text: working);
+                                return AlertDialog(
+                                  title: const Text('Enter registration number'),
+                                  content: TextField(
+                                    controller: manualController,
+                                    decoration: const InputDecoration(
+                                      hintText: 'Type registration number here',
+                                    ),
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(dialogCtx).pop(),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: () => Navigator.of(dialogCtx)
+                                          .pop(manualController.text.trim()),
+                                      child: const Text('Use'),
+                                    ),
+                                  ],
+                                );
+                              },
                             );
-                          }
-                        },
-                      ),
+                            if (selected != null && selected.isNotEmpty) {
+                              if (!mounted) return;
+                              Navigator.of(ctx).pop();
+                              await _executeSearch(selected,
+                                  rawOverride: selected);
+                            }
+                          },
+                          icon: const Icon(Icons.edit_rounded, size: 18),
+                          label: const Text('Manual entry'),
+                        ),
                     ],
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: controller,
-                    maxLines: 4,
-                    minLines: 2,
-                    decoration: InputDecoration(
-                      hintText: 'Edit or confirm the extracted text',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    onChanged: (v) => working = v,
                   ),
                   const SizedBox(height: 12),
                   if (regCandidates.isNotEmpty) ...[
                     Text(
-                      'Detected Reg. No.',
+                      'Detected numbers',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).hintColor,
-                      ),
+                            color: Theme.of(context).hintColor,
+                          ),
                     ),
                     const SizedBox(height: 6),
                     if (_sessionRawTexts.isNotEmpty)
@@ -647,13 +662,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
                         return ActionChip(
                           label: Text(code),
                           onPressed: () {
-                            controller.text = code;
-                            working = code;
+                            Navigator.of(ctx).pop();
+                            _executeSearch(code, rawOverride: code);
                           },
                         );
                       }).toList(),
                     ),
                     const SizedBox(height: 8),
+                  ] else ...[
+                    const Text(
+                      'No clear registration number detected.\nYou can enter it manually.',
+                    ),
                   ],
                   Row(
                     children: [
@@ -664,12 +683,19 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       const Spacer(),
                       ElevatedButton.icon(
                         onPressed: () {
-                          final edited = controller.text;
                           Navigator.of(ctx).pop();
-                          _executeSearch(edited, rawOverride: edited);
+                          final manual = (regCandidates.isNotEmpty
+                                  ? regCandidates.first
+                                  : working)
+                              .trim();
+                          _executeSearch(manual, rawOverride: manual);
                         },
                         icon: const Icon(Icons.search_rounded),
-                        label: const Text('Use & Search'),
+                        label: Text(
+                          regCandidates.isNotEmpty
+                              ? 'Use top match'
+                              : 'Use extracted text',
+                        ),
                       ),
                     ],
                   ),
@@ -683,94 +709,180 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }
 
   Future<void> _executeSearch(String text, {String? rawOverride}) async {
-    // Show a lightweight blocking overlay while matching
-    if (mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const _MatchingDialog(),
-      );
-      // Give the dialog a frame to render
-      await Future.delayed(const Duration(milliseconds: 50));
-    }
-    // Prefer direct Reg. No. match using raw OCR (more reliable for patterns)
-    final raw = rawOverride ?? _lastRawText ?? text;
-    final byReg = widget.fdaChecker.findByRegNo(raw);
-    // If a reg-like code is present but not found, avoid heuristic false positives
-    final regLike =
-        RegExp(r"\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b").hasMatch(raw) ||
-        RegExp(
-          r"\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b",
-          caseSensitive: false,
-        ).hasMatch(raw);
-    final matchedProduct =
-        byReg ??
-        (regLike
-            ? null
-            : widget.fdaChecker.findProductDetailsWithExplain(text));
-    if (!mounted) return;
-    if (matchedProduct != null) {
-      final eval = widget.fdaChecker.evaluateScan(
-        raw: raw,
-        product: matchedProduct,
-      );
-      final status = eval.status;
-      if (eval.reasons.isNotEmpty) {
-        matchedProduct['verification_reasons'] = eval.reasons.join('\n');
+    if (_isMatching) return;
+    _isMatching = true;
+    String? followUpText;
+    Future<void> Function()? followUpAction;
+    bool dialogShown = false;
+
+    try {
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const _MatchingDialog(),
+        );
+        dialogShown = true;
+        await Future.delayed(const Duration(milliseconds: 50));
       }
-      await HistoryService.instance.addEntry(
-        scannedText: text,
-        productInfo: matchedProduct,
-        status: status,
-      );
-      if (!mounted) return;
-      // Close matching overlay before navigating
-      if (Navigator.canPop(context)) {
-        Navigator.of(context).pop();
+
+      final raw = rawOverride ?? _lastRawText ?? text;
+      final imagePrediction =
+          await _imageClassifier.classify(rawText: raw, additionalText: text);
+      final imageInfoMap = imagePrediction?.toMap();
+      final byReg = widget.fdaChecker.findByRegNo(raw);
+      final regLike =
+          RegExp(r'\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b').hasMatch(raw) ||
+              RegExp(
+                r'\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b',
+                caseSensitive: false,
+              ).hasMatch(raw);
+
+      Map<String, String>? matchedProduct;
+      if (byReg != null) {
+        matchedProduct = byReg;
+      } else if (!regLike) {
+        matchedProduct =
+            await widget.fdaChecker.findProductDetailsWithExplainAsync(text);
       }
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) =>
-              ScanResultScreen(productInfo: matchedProduct, status: status),
-        ),
-      );
-      // Clear any accumulated sides after a completed search
-      _sessionTexts.clear();
-      _sessionRawTexts.clear();
-    } else {
-      // Close matching overlay before navigating
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.of(context).pop();
-      }
-      await HistoryService.instance.addEntry(
-        scannedText: raw,
-        productInfo: null,
-        status: 'NOT FOUND',
-      );
+
       if (!mounted) return;
-      final returned = await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) =>
-              NotFoundScreen(scannedText: raw, fdaChecker: widget.fdaChecker),
-        ),
-      );
-      if (!mounted) return;
-      if (returned is String && returned.isNotEmpty) {
-        setState(() => _extractedText = returned);
-        final wantsReview = SettingsService.instance.reviewBeforeSearch;
-        if (wantsReview) {
-          await _reviewAndSearch(preset: returned, capturePhoto: false);
-        } else {
-          await _executeSearch(returned);
+
+      if (matchedProduct != null) {
+        final nonNullProduct = matchedProduct;
+        if (imagePrediction != null) {
+          nonNullProduct['image_category'] = imagePrediction.category;
+          nonNullProduct['image_product'] = imagePrediction.productName;
+          nonNullProduct['image_confidence'] =
+              imagePrediction.confidence.toStringAsFixed(2);
+          nonNullProduct['image_source'] = imagePrediction.source;
         }
-      } else {
-        // Ensure we close overlay if no navigation occurred
-        if (mounted && Navigator.canPop(context)) {
+        final eval = widget.fdaChecker.evaluateScan(
+          raw: raw,
+          product: nonNullProduct,
+        );
+        final status = eval.status;
+        if (eval.reasons.isNotEmpty) {
+          nonNullProduct['verification_reasons'] = eval.reasons.join('\n');
+        }
+        if (dialogShown && Navigator.canPop(context)) {
           Navigator.of(context).pop();
+          dialogShown = false;
+          await Future<void>.delayed(Duration.zero);
+        }
+        if (!mounted) return;
+        if (status.toUpperCase() == 'UNRECOGNIZED') {
+          final List<String> reasonsText = eval.reasons.isNotEmpty
+              ? eval.reasons
+              : ['Possible mismatch between scan and FDA record'];
+          await showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) {
+              return AlertDialog(
+                title: Row(
+                  children: const [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: Colors.redAccent,
+                    ),
+                    SizedBox(width: 8),
+                    Text('ALERT'),
+                  ],
+                ),
+                content: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'The product appears to be UNRECOGNIZED based on the following:',
+                      ),
+                      const SizedBox(height: 12),
+                      ...reasonsText.map(
+                        (r) => Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: Text('- $r'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('View Details'),
+                  ),
+                ],
+              );
+            },
+          );
+        }
+        await HistoryService.instance.addEntry(
+          scannedText: text,
+          productInfo: nonNullProduct,
+          status: status,
+          imageInfo: imageInfoMap,
+        );
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) =>
+                ScanResultScreen(productInfo: nonNullProduct, status: status),
+          ),
+        );
+        _sessionTexts.clear();
+        _sessionRawTexts.clear();
+      } else {
+        if (dialogShown && Navigator.canPop(context)) {
+          Navigator.of(context).pop();
+          dialogShown = false;
+          await Future<void>.delayed(Duration.zero);
+        }
+        await HistoryService.instance.addEntry(
+          scannedText: raw,
+          productInfo: null,
+          status: 'NOT FOUND',
+          imageInfo: imageInfoMap,
+        );
+        if (!mounted) return;
+        final returned = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => NotFoundScreen(
+              scannedText: raw,
+              fdaChecker: widget.fdaChecker,
+              imageInfo: imageInfoMap,
+            ),
+          ),
+        );
+        if (!mounted) return;
+        if (returned is String && returned.isNotEmpty) {
+          setState(() => _extractedText = returned);
+          final wantsReview = SettingsService.instance.reviewBeforeSearch;
+          if (wantsReview) {
+            followUpAction = () =>
+                _reviewAndSearch(preset: returned, capturePhoto: false);
+          } else {
+            followUpText = returned;
+          }
+        } else if (dialogShown && Navigator.canPop(context)) {
+          Navigator.of(context).pop();
+          dialogShown = false;
         }
       }
+    } finally {
+      if (mounted && dialogShown && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+      _isMatching = false;
+    }
+
+    if (followUpAction != null) {
+      await followUpAction();
+    } else if (followUpText != null) {
+      await _executeSearch(followUpText);
     }
   }
 
@@ -873,15 +985,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
             ),
           ),
 
-          Positioned.fill(
-            child: IgnorePointer(
-              child: CustomPaint(
-                painter: _ReticlePainter(
-                  color: Colors.white.withValues(alpha: 0.9),
-                ),
-              ),
-            ),
-          ),
           Positioned(
             left: 0,
             right: 0,
@@ -1359,74 +1462,6 @@ class _MatchingDialog extends StatelessWidget {
   }
 }
 
-class _ReticlePainter extends CustomPainter {
-  final Color color;
-  _ReticlePainter({required this.color});
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
 
-    final rect = Rect.fromCenter(
-      center: Offset(size.width / 2, size.height / 2.1),
-      width: size.width * 0.74,
-      height: size.height * 0.28,
-    );
 
-    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(16));
-    canvas.drawRRect(rrect, paint);
-
-    // Corner accents
-    const corner = 18.0;
-    // top-left
-    canvas.drawLine(
-      rect.topLeft,
-      rect.topLeft + const Offset(corner, 0),
-      paint,
-    );
-    canvas.drawLine(
-      rect.topLeft,
-      rect.topLeft + const Offset(0, corner),
-      paint,
-    );
-    // top-right
-    canvas.drawLine(
-      rect.topRight,
-      rect.topRight + const Offset(-corner, 0),
-      paint,
-    );
-    canvas.drawLine(
-      rect.topRight,
-      rect.topRight + const Offset(0, corner),
-      paint,
-    );
-    // bottom-left
-    canvas.drawLine(
-      rect.bottomLeft,
-      rect.bottomLeft + const Offset(corner, 0),
-      paint,
-    );
-    canvas.drawLine(
-      rect.bottomLeft,
-      rect.bottomLeft + const Offset(0, -corner),
-      paint,
-    );
-    // bottom-right
-    canvas.drawLine(
-      rect.bottomRight,
-      rect.bottomRight + const Offset(-corner, 0),
-      paint,
-    );
-    canvas.drawLine(
-      rect.bottomRight,
-      rect.bottomRight + const Offset(0, -corner),
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
-}
