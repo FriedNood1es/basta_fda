@@ -1,5 +1,3 @@
-import 'dart:math';
-
 class ImagePrediction {
   final String category;
   final String productName;
@@ -31,6 +29,7 @@ class MockImageClassifier {
       category: 'medicine',
       product: 'Biogesic',
       keywords: ['biogesic', 'paracetamol'],
+      confidence: 0.98,
     ),
     _SampleProduct(
       category: 'medicine',

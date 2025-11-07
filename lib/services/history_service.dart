@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
+import 'package:basta_fda/models/scan_verdict.dart';
 
 class HistoryEntry {
   final DateTime timestamp;
@@ -8,6 +9,9 @@ class HistoryEntry {
   final Map<String, String>? productInfo; // null when not found
   final String status; // e.g., RECOGNIZED / NOT FOUND / EXPIRED
   final Map<String, String>? imageInfo;
+  final RegistrationStatus registrationStatus;
+  final ImageCheckStatus imageStatus;
+  final String? regNumber;
 
   HistoryEntry({
     required this.timestamp,
@@ -15,6 +19,9 @@ class HistoryEntry {
     required this.productInfo,
     required this.status,
     this.imageInfo,
+    required this.registrationStatus,
+    required this.imageStatus,
+    this.regNumber,
   });
 
   Map<String, dynamic> toJson() => {
@@ -23,15 +30,65 @@ class HistoryEntry {
         'productInfo': productInfo,
         'status': status,
         'imageInfo': imageInfo,
+        'registrationStatus': registrationStatus.name,
+        'imageStatus': imageStatus.name,
+        'regNumber': regNumber,
       };
 
-  static HistoryEntry fromJson(Map<String, dynamic> json) => HistoryEntry(
-        timestamp: DateTime.parse(json['timestamp'] as String),
-        scannedText: (json['scannedText'] ?? '') as String,
-        productInfo: (json['productInfo'] as Map?)?.cast<String, String>(),
-        status: (json['status'] ?? '') as String,
-        imageInfo: (json['imageInfo'] as Map?)?.cast<String, String>(),
+  static HistoryEntry fromJson(Map<String, dynamic> json) {
+    RegistrationStatus parseReg(String? raw, Map<String, String>? product) {
+      if (raw == null || raw.isEmpty) {
+        return product != null
+            ? RegistrationStatus.registered
+            : RegistrationStatus.unregistered;
+      }
+      return RegistrationStatus.values.firstWhere(
+        (e) => e.name == raw,
+        orElse: () => product != null
+            ? RegistrationStatus.registered
+            : RegistrationStatus.unregistered,
       );
+    }
+
+    ImageCheckStatus parseImg(String? raw, Map<String, String>? imageInfo) {
+      if (raw == null || raw.isEmpty) {
+        return imageInfo != null
+            ? ImageCheckStatus.recognized
+            : ImageCheckStatus.skipped;
+      }
+      return ImageCheckStatus.values.firstWhere(
+        (e) => e.name == raw,
+        orElse: () => imageInfo != null
+            ? ImageCheckStatus.recognized
+            : ImageCheckStatus.skipped,
+      );
+    }
+
+    final product =
+        (json['productInfo'] as Map?)?.cast<String, String>();
+    final imageInfo =
+        (json['imageInfo'] as Map?)?.cast<String, String>();
+    return HistoryEntry(
+      timestamp: DateTime.parse(json['timestamp'] as String),
+      scannedText: (json['scannedText'] ?? '') as String,
+      productInfo: product,
+      status: (json['status'] ?? '') as String,
+      imageInfo: imageInfo,
+      registrationStatus: parseReg(
+        json['registrationStatus'] as String?,
+        product,
+      ),
+      imageStatus: parseImg(json['imageStatus'] as String?, imageInfo),
+      regNumber: (() {
+        final raw = json['regNumber'];
+        if (raw is String) {
+          final trimmed = raw.trim();
+          if (trimmed.isNotEmpty) return trimmed;
+        }
+        return null;
+      })(),
+    );
+  }
 }
 
 class HistoryService {
@@ -126,6 +183,9 @@ class HistoryService {
     required Map<String, String>? productInfo,
     required String status,
     Map<String, String>? imageInfo,
+    required RegistrationStatus registrationStatus,
+    required ImageCheckStatus imageStatus,
+    String? regNumber,
   }) async {
     await load();
     _entries.add(
@@ -135,6 +195,9 @@ class HistoryService {
         productInfo: productInfo,
         status: status,
         imageInfo: imageInfo,
+        registrationStatus: registrationStatus,
+        imageStatus: imageStatus,
+        regNumber: regNumber,
       ),
     );
     await _persist();

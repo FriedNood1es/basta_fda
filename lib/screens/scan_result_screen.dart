@@ -17,19 +17,42 @@ import 'package:share_plus/share_plus.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'package:basta_fda/services/settings_service.dart';
+import 'package:basta_fda/models/scan_verdict.dart';
 
-class ScanResultScreen extends StatelessWidget {
+class ScanResultScreen extends StatefulWidget {
   final Map<String, String> productInfo;
-
   final String status;
+  final RegistrationStatus registrationStatus;
+  final ImageCheckResult initialImageResult;
+  final Future<ImageCheckResult>? imageResultFuture;
+  final String? confirmedRegNumber;
 
   const ScanResultScreen({
     super.key,
-
     required this.productInfo,
-
     required this.status,
+    required this.registrationStatus,
+    required this.initialImageResult,
+    this.imageResultFuture,
+    this.confirmedRegNumber,
   });
+
+  @override
+  State<ScanResultScreen> createState() => _ScanResultScreenState();
+}
+
+class _ScanResultScreenState extends State<ScanResultScreen> {
+  late ImageCheckResult _imageResult;
+
+  @override
+  void initState() {
+    super.initState();
+    _imageResult = widget.initialImageResult;
+    widget.imageResultFuture?.then((result) {
+      if (!mounted || result == _imageResult) return;
+      setState(() => _imageResult = result);
+    });
+  }
 
   void _showRedFlagsChecklist(BuildContext context) {
     const redFlags = [
@@ -189,16 +212,37 @@ class ScanResultScreen extends StatelessWidget {
       }
     }
 
+    final productInfo = widget.productInfo;
+    final status = widget.status;
     final theme = Theme.of(context);
-
     final primary = theme.colorScheme.primary;
-
+    final imageInfo = _imageResult.info;
     final regNo = upperOrNA(productInfo['reg_no']);
-    final imageProduct = productInfo['image_product'] ?? '';
-    final imageCategory = productInfo['image_category'] ?? '';
-    final imageConfidence = productInfo['image_confidence'] ?? '';
-    final imageSource = productInfo['image_source'] ?? '';
     final sColor = statusColor(status, theme);
+    final registrationColor =
+        widget.registrationStatus == RegistrationStatus.registered
+            ? Colors.green.shade600
+            : theme.colorScheme.error;
+    Color imageColor;
+    switch (_imageResult.status) {
+      case ImageCheckStatus.recognized:
+        imageColor = theme.colorScheme.primary;
+        break;
+      case ImageCheckStatus.unrecognized:
+        imageColor = theme.colorScheme.tertiary;
+        break;
+      case ImageCheckStatus.failed:
+        imageColor = theme.colorScheme.error;
+        break;
+      case ImageCheckStatus.skipped:
+      case ImageCheckStatus.pending:
+        imageColor = theme.colorScheme.outline;
+        break;
+    }
+    final imageProduct = imageInfo?['product'] ?? '';
+    final imageCategory = imageInfo?['category'] ?? '';
+    final imageConfidence = imageInfo?['confidence'] ?? '';
+    final imageSource = imageInfo?['source'] ?? '';
 
     return Scaffold(
       appBar: AppBar(title: const Text('Scan Result')),
@@ -220,60 +264,105 @@ class ScanResultScreen extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
               ),
 
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  CircleAvatar(
-                    radius: 28,
-
-                    backgroundColor: primary.withValues(alpha: 0.1),
-
-                    child: Image.asset('assets/logo.png', height: 32),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      CircleAvatar(
+                        radius: 28,
+                        backgroundColor: primary.withValues(alpha: 0.1),
+                        child: Image.asset('assets/logo.png', height: 32),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              titleCase(productInfo['brand_name']),
+                              style: theme.textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Registration No.: $regNo',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.hintColor,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Last Updated: ${niceDate(productInfo['issuance_date'])}',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.hintColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-
-                  const SizedBox(width: 16),
-
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-
-                      children: [
-                        Text(
-                          titleCase(productInfo['brand_name']),
-
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-
-                        const SizedBox(height: 6),
-
-                        Text(
-                          'Registration No.: $regNo',
-
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.hintColor,
-                          ),
-                        ),
-
-                        const SizedBox(height: 2),
-
-                        Text(
-                          'Last Updated: ${niceDate(productInfo['issuance_date'])}',
-
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.hintColor,
-                          ),
-                        ),
-                      ],
-                    ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _StatusChip(
+                        title: 'Registration',
+                        value: widget.registrationStatus.label,
+                        color: registrationColor,
+                        icon: Icons.rule_folder_rounded,
+                      ),
+                      _StatusChip(
+                        title: 'Image',
+                        value: _imageResult.status.label,
+                        color: imageColor,
+                        icon: Icons.image_search_rounded,
+                      ),
+                      _StatusChip(
+                        title: 'FDA Verdict',
+                        value: status,
+                        color: sColor,
+                        icon: Icons.verified_rounded,
+                      ),
+                    ],
                   ),
-
-                  _StatusChip(label: status, color: sColor),
                 ],
               ),
             ),
+
+            if (_imageResult.status.needsWarning) ...[
+              const SizedBox(height: 8),
+              Card(
+                color: theme.colorScheme.errorContainer.withValues(alpha: 0.35),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.warning_amber_rounded,
+                        color: theme.colorScheme.error,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Registration verification relied on text only. Capture a reference image when possible.',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onErrorContainer,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
 
             const SizedBox(height: 16),
 
@@ -612,6 +701,9 @@ class ScanResultScreen extends StatelessWidget {
                       productInfo: productInfo,
 
                       status: status,
+                      registrationStatus: widget.registrationStatus,
+                      imageStatus: _imageResult.status,
+                      confirmedRegNumber: widget.confirmedRegNumber,
                     ),
                   );
                 },
@@ -647,35 +739,54 @@ class ScanResultScreen extends StatelessWidget {
 }
 
 class _StatusChip extends StatelessWidget {
-  final String label;
-
+  final String title;
+  final String value;
   final Color color;
+  final IconData icon;
 
-  const _StatusChip({required this.label, required this.color});
+  const _StatusChip({
+    required this.title,
+    required this.value,
+    required this.color,
+    required this.icon,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.15),
-
         borderRadius: BorderRadius.circular(999),
-
         border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
-
-      child: Text(
-        label.toUpperCase(),
-
-        style: TextStyle(
-          fontWeight: FontWeight.w700,
-
-          color: color,
-
-          letterSpacing: 0.4,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title.toUpperCase(),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  letterSpacing: 0.7,
+                  color: color,
+                ),
+              ),
+              Text(
+                value,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: theme.colorScheme.onSurface,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -735,7 +846,17 @@ class _ReportProductSheet extends StatefulWidget {
 
   final String status;
 
-  const _ReportProductSheet({required this.productInfo, required this.status});
+  final RegistrationStatus registrationStatus;
+  final ImageCheckStatus imageStatus;
+  final String? confirmedRegNumber;
+
+  const _ReportProductSheet({
+    required this.productInfo,
+    required this.status,
+    required this.registrationStatus,
+    required this.imageStatus,
+    this.confirmedRegNumber,
+  });
 
   @override
   State<_ReportProductSheet> createState() => _ReportProductSheetState();
@@ -931,6 +1052,12 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
         'manufacturer': widget.productInfo['manufacturer'] ?? '',
 
         'distributor': widget.productInfo['distributor'] ?? '',
+
+        'registrationStatus': widget.registrationStatus.name,
+
+        'imageStatus': widget.imageStatus.name,
+
+        'confirmedRegNumber': widget.confirmedRegNumber ?? '',
 
         'reason':
             widget.productInfo['verification_reasons'] ??
@@ -1271,9 +1398,15 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
                           'Generic: ${widget.productInfo['generic_name'] ?? ''}',
                         )
                         ..writeln(
-                          'Reg No: ${widget.productInfo['reg_no'] ?? ''}',
+                          'Confirmed Reg No: ${widget.confirmedRegNumber ?? widget.productInfo['reg_no'] ?? ''}',
                         )
-                        ..writeln('Status: ${widget.status}')
+                        ..writeln(
+                          'Registration Status: ${widget.registrationStatus.label}',
+                        )
+                        ..writeln(
+                          'Image Check: ${widget.imageStatus.label}',
+                        )
+                        ..writeln('FDA Verdict: ${widget.status}')
                         ..writeln(
                           'Dosage: ${widget.productInfo['dosage_form'] ?? ''} ${widget.productInfo['dosage_strength'] ?? ''}',
                         )

@@ -432,7 +432,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
             child: Text(label, style: const TextStyle(color: Colors.black54)),
           ),
           const SizedBox(width: 8),
-          Expanded(child: Text(value.isEmpty ? '—' : value)),
+          Expanded(child: Text(value.isEmpty ? '-' : value)),
         ],
       ),
     );
@@ -481,7 +481,6 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                           'Report: ${(d['brand_name'] ?? d['reg_no'] ?? '').toString()}',
                         )
                         ..writeln(
-                      'Status: ${(d['status'] ?? 'REPORTED').toString()}',
                           'Status: ${statusNormalized.isNotEmpty ? statusNormalized : 'REPORTED'}',
                         )
                         ..writeln(

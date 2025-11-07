@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:basta_fda/services/history_service.dart';
 import 'package:basta_fda/screens/scan_result_screen.dart';
 import 'package:basta_fda/screens/not_found_screen.dart';
+import 'package:basta_fda/models/scan_verdict.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -86,14 +87,26 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 final ts = '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
                 return ListTile(
                   title: Text(title),
-                  subtitle: Text('${e.status} - $ts'),
+                  subtitle: Text(
+                    '${e.registrationStatus.label} | Image ${e.imageStatus.label} - $ts',
+                  ),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () {
                     if (e.productInfo != null) {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => ScanResultScreen(productInfo: e.productInfo!, status: e.status),
+                          builder: (_) => ScanResultScreen(
+                            productInfo: e.productInfo!,
+                            status: e.status,
+                            registrationStatus: e.registrationStatus,
+                            initialImageResult: ImageCheckResult(
+                              status: e.imageStatus,
+                              info: e.imageInfo,
+                            ),
+                            imageResultFuture: null,
+                            confirmedRegNumber: e.regNumber,
+                          ),
                         ),
                       );
                     } else {
@@ -103,6 +116,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           builder: (_) => NotFoundScreen(
                             scannedText: e.scannedText,
                             imageInfo: e.imageInfo,
+                            imageStatus: e.imageStatus,
                           ),
                         ),
                       );

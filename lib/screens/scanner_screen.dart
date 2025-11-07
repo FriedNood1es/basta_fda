@@ -1,10 +1,11 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData, HapticFeedback;
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:basta_fda/models/scan_verdict.dart';
 import 'package:basta_fda/services/fda_checker.dart';
 import 'package:basta_fda/screens/scan_result_screen.dart';
 import 'package:basta_fda/screens/not_found_screen.dart';
@@ -63,6 +64,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   double _baseZoomForScale = 1.0;
   final MockImageClassifier _imageClassifier =
       MockImageClassifier.instance;
+  String? _confirmedRegNumber;
 
   @override
   void initState() {
@@ -515,7 +517,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     if (!wantsReview) {
       final text = await _scanFromPhoto();
       if (text != null && text.isNotEmpty) {
-        await _executeSearch(text);
+        await _executeSearch(text, skipImageCheck: false);
       }
       return;
     }
@@ -525,6 +527,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Future<void> _reviewAndSearch({
     String? preset,
     bool capturePhoto = true,
+    bool allowImageCheck = true,
   }) async {
     // Start with preset or capture a fresh still for reliable OCR
     final first = capturePhoto ? await _scanFromPhoto() : preset;
@@ -539,6 +542,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
+        final bool imageAllowed = allowImageCheck;
         // Detect Reg. No. candidates from raw or current text
         final rawForReg = _lastRawText ?? working;
         final regCandidates = widget.fdaChecker.regCandidates(rawForReg);
@@ -557,58 +561,85 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      const Text(
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      const header = Text(
                         'Choose Registration Number',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
                         ),
-                      ),
-                      const Spacer(),
-                      if (regCandidates.isNotEmpty)
-                        FilledButton.tonalIcon(
-                          onPressed: () async {
-                            final selected = await showDialog<String>(
-                              context: context,
-                              builder: (dialogCtx) {
-                                final manualController =
-                                    TextEditingController(text: working);
-                                return AlertDialog(
-                                  title: const Text('Enter registration number'),
-                                  content: TextField(
-                                    controller: manualController,
-                                    decoration: const InputDecoration(
-                                      hintText: 'Type registration number here',
-                                    ),
+                      );
+                      if (regCandidates.isEmpty) {
+                        return header;
+                      }
+                      final manualButton = FilledButton.tonalIcon(
+                        onPressed: () async {
+                          final selected = await showDialog<String>(
+                            context: context,
+                            builder: (dialogCtx) {
+                              final manualController =
+                                  TextEditingController(text: working);
+                              return AlertDialog(
+                                title: const Text('Enter registration number'),
+                                content: TextField(
+                                  controller: manualController,
+                                  decoration: const InputDecoration(
+                                    hintText: 'Type registration number here',
                                   ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () =>
-                                          Navigator.of(dialogCtx).pop(),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    ElevatedButton(
-                                      onPressed: () => Navigator.of(dialogCtx)
-                                          .pop(manualController.text.trim()),
-                                      child: const Text('Use'),
-                                    ),
-                                  ],
-                                );
-                              },
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.of(dialogCtx).pop(),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () => Navigator.of(dialogCtx)
+                                        .pop(manualController.text.trim()),
+                                    child: const Text('Use'),
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+                          if (selected != null && selected.isNotEmpty) {
+                            if (!context.mounted) return;
+                            Navigator.of(ctx).pop();
+                            await _executeSearch(
+                              selected,
+                              rawOverride: selected,
+                              skipImageCheck: !imageAllowed,
                             );
-                            if (selected != null && selected.isNotEmpty) {
-                              if (!mounted) return;
-                              Navigator.of(ctx).pop();
-                              await _executeSearch(selected,
-                                  rawOverride: selected);
-                            }
-                          },
-                          icon: const Icon(Icons.edit_rounded, size: 18),
-                          label: const Text('Manual entry'),
-                        ),
-                    ],
+                          }
+                        },
+                        icon: const Icon(Icons.edit_rounded, size: 18),
+                        label: const Text('Manual entry'),
+                      );
+                      if (constraints.maxWidth < 360) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            header,
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: manualButton,
+                            ),
+                          ],
+                        );
+                      }
+                      return Wrap(
+                        spacing: 12,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        alignment: WrapAlignment.spaceBetween,
+                        children: [
+                          header,
+                          manualButton,
+                        ],
+                      );
+                    },
                   ),
                   const SizedBox(height: 12),
                   if (regCandidates.isNotEmpty) ...[
@@ -663,7 +694,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
                           label: Text(code),
                           onPressed: () {
                             Navigator.of(ctx).pop();
-                            _executeSearch(code, rawOverride: code);
+                            _executeSearch(
+                              code,
+                              rawOverride: code,
+                              skipImageCheck: !imageAllowed,
+                            );
                           },
                         );
                       }).toList(),
@@ -688,7 +723,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
                                   ? regCandidates.first
                                   : working)
                               .trim();
-                          _executeSearch(manual, rawOverride: manual);
+                          _executeSearch(
+                            manual,
+                            rawOverride: manual,
+                            skipImageCheck: !imageAllowed,
+                          );
                         },
                         icon: const Icon(Icons.search_rounded),
                         label: Text(
@@ -708,12 +747,45 @@ class _ScannerScreenState extends State<ScannerScreen> {
     );
   }
 
-  Future<void> _executeSearch(String text, {String? rawOverride}) async {
+  Future<void> _executeSearch(
+    String text, {
+    String? rawOverride,
+    bool skipImageCheck = false,
+  }) async {
     if (_isMatching) return;
     _isMatching = true;
     String? followUpText;
     Future<void> Function()? followUpAction;
     bool dialogShown = false;
+
+    Future<ImageCheckResult> resolveImageCheck(String rawText) {
+      if (skipImageCheck) {
+        return Future.value(
+          const ImageCheckResult(status: ImageCheckStatus.skipped),
+        );
+      }
+      try {
+        return _imageClassifier
+            .classify(rawText: rawText, additionalText: text)
+            .then((prediction) {
+          if (prediction == null) {
+            return const ImageCheckResult(
+              status: ImageCheckStatus.unrecognized,
+            );
+          }
+          return ImageCheckResult(
+            status: ImageCheckStatus.recognized,
+            info: prediction.toMap(),
+          );
+        }).catchError(
+          (_) => const ImageCheckResult(status: ImageCheckStatus.failed),
+        );
+      } catch (_) {
+        return Future.value(
+          const ImageCheckResult(status: ImageCheckStatus.failed),
+        );
+      }
+    }
 
     try {
       if (mounted) {
@@ -726,10 +798,19 @@ class _ScannerScreenState extends State<ScannerScreen> {
         await Future.delayed(const Duration(milliseconds: 50));
       }
 
-      final raw = rawOverride ?? _lastRawText ?? text;
-      final imagePrediction =
-          await _imageClassifier.classify(rawText: raw, additionalText: text);
-      final imageInfoMap = imagePrediction?.toMap();
+      final trimmedInput = text.trim();
+      final raw = (rawOverride ?? _lastRawText ?? text).trim();
+      if (trimmedInput.isNotEmpty) {
+        _confirmedRegNumber = trimmedInput;
+      } else if (raw.isNotEmpty) {
+        _confirmedRegNumber = raw;
+      }
+
+      final imageResultFuture = resolveImageCheck(raw);
+      final initialImageResult = skipImageCheck
+          ? const ImageCheckResult(status: ImageCheckStatus.skipped)
+          : const ImageCheckResult(status: ImageCheckStatus.pending);
+
       final byReg = widget.fdaChecker.findByRegNo(raw);
       final regLike =
           RegExp(r'\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b').hasMatch(raw) ||
@@ -749,14 +830,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       if (!mounted) return;
 
       if (matchedProduct != null) {
-        final nonNullProduct = matchedProduct;
-        if (imagePrediction != null) {
-          nonNullProduct['image_category'] = imagePrediction.category;
-          nonNullProduct['image_product'] = imagePrediction.productName;
-          nonNullProduct['image_confidence'] =
-              imagePrediction.confidence.toStringAsFixed(2);
-          nonNullProduct['image_source'] = imagePrediction.source;
-        }
+        final nonNullProduct = Map<String, String>.from(matchedProduct);
         final eval = widget.fdaChecker.evaluateScan(
           raw: raw,
           product: nonNullProduct,
@@ -818,18 +892,35 @@ class _ScannerScreenState extends State<ScannerScreen> {
             },
           );
         }
-        await HistoryService.instance.addEntry(
-          scannedText: text,
-          productInfo: nonNullProduct,
-          status: status,
-          imageInfo: imageInfoMap,
+
+        final registrationStatus = RegistrationStatus.registered;
+        final historyProduct = Map<String, String>.from(nonNullProduct);
+        unawaited(
+          imageResultFuture.then((imageResult) async {
+            await HistoryService.instance.addEntry(
+              scannedText: text,
+              productInfo: historyProduct,
+              status: status,
+              imageInfo: imageResult.info,
+              registrationStatus: registrationStatus,
+              imageStatus: imageResult.status,
+              regNumber: _confirmedRegNumber,
+            );
+          }),
         );
+
         if (!mounted) return;
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) =>
-                ScanResultScreen(productInfo: nonNullProduct, status: status),
+            builder: (context) => ScanResultScreen(
+              productInfo: nonNullProduct,
+              status: status,
+              registrationStatus: registrationStatus,
+              initialImageResult: initialImageResult,
+              imageResultFuture: imageResultFuture,
+              confirmedRegNumber: _confirmedRegNumber,
+            ),
           ),
         );
         _sessionTexts.clear();
@@ -840,11 +931,15 @@ class _ScannerScreenState extends State<ScannerScreen> {
           dialogShown = false;
           await Future<void>.delayed(Duration.zero);
         }
+        final imageResult = await imageResultFuture;
         await HistoryService.instance.addEntry(
           scannedText: raw,
           productInfo: null,
           status: 'NOT FOUND',
-          imageInfo: imageInfoMap,
+          imageInfo: imageResult.info,
+          registrationStatus: RegistrationStatus.unregistered,
+          imageStatus: imageResult.status,
+          regNumber: _confirmedRegNumber,
         );
         if (!mounted) return;
         final returned = await Navigator.push(
@@ -853,7 +948,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
             builder: (context) => NotFoundScreen(
               scannedText: raw,
               fdaChecker: widget.fdaChecker,
-              imageInfo: imageInfoMap,
+              imageInfo: imageResult.info,
+              imageStatus: imageResult.status,
             ),
           ),
         );
@@ -862,14 +958,14 @@ class _ScannerScreenState extends State<ScannerScreen> {
           setState(() => _extractedText = returned);
           final wantsReview = SettingsService.instance.reviewBeforeSearch;
           if (wantsReview) {
-            followUpAction = () =>
-                _reviewAndSearch(preset: returned, capturePhoto: false);
+            followUpAction = () => _reviewAndSearch(
+                  preset: returned,
+                  capturePhoto: false,
+                  allowImageCheck: false,
+                );
           } else {
             followUpText = returned;
           }
-        } else if (dialogShown && Navigator.canPop(context)) {
-          Navigator.of(context).pop();
-          dialogShown = false;
         }
       }
     } finally {
@@ -882,7 +978,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
     if (followUpAction != null) {
       await followUpAction();
     } else if (followUpText != null) {
-      await _executeSearch(followUpText);
+      await _executeSearch(
+        followUpText,
+        skipImageCheck: true,
+      );
     }
   }
 
@@ -1281,81 +1380,71 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   ),
 
                   const SizedBox(height: 10),
-                  if (widget.fdaChecker.isLoaded)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Text(
-                        'Optional: add another side after rotating the packaging to boost matching accuracy.',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.onSurface.withValues(alpha: 0.7),
-                        ),
-                      ),
+                  if (widget.fdaChecker.isLoaded) ...[
+                    Text(
+                      'Need another angle? Capture again for stronger OCR.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withValues(alpha: 0.7),
+                          ),
                     ),
-                  if (_sessionRawTexts.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: _sessionRawTexts.asMap().entries.map((
-                            entry,
-                          ) {
-                            final idx = entry.key + 1;
-                            final sample = entry.value.trim();
-                            final preview = sample.length > 24
-                                ? "${sample.substring(0, 24)}..."
-                                : sample;
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: Chip(
-                                label: Text("Side $idx - $preview"),
-                                deleteIcon: const Icon(
-                                  Icons.close_rounded,
-                                  size: 16,
-                                ),
-                                onDeleted: () {
-                                  setState(() {
-                                    _sessionRawTexts.removeAt(idx - 1);
-                                    if (idx - 1 < _sessionTexts.length) {
-                                      _sessionTexts.removeAt(idx - 1);
-                                    }
-                                  });
-                                },
-                              ),
-                            );
-                          }).toList(),
-                        ),
-                      ),
-                    ),
-                  if (widget.fdaChecker.isLoaded)
+                    const SizedBox(height: 6),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: TextButton.icon(
+                        icon: const Icon(Icons.add_a_photo_rounded, size: 18),
+                        label: const Text('Add another angle'),
                         onPressed: _isCapturing
                             ? null
-                            : () {
+                            : () async {
                                 final clean = _extractedText.trim();
-                                final raw = (_lastRawText ?? _extractedText)
-                                    .trim();
+                                final raw =
+                                    (_lastRawText ?? _extractedText).trim();
                                 if (clean.isNotEmpty) _sessionTexts.add(clean);
                                 if (raw.isNotEmpty) _sessionRawTexts.add(raw);
-                                if (context.mounted) {
+                                final savedCount = _sessionRawTexts.length;
+                                final scanned = await _scanFromPhoto();
+                                if (!context.mounted) return;
+                                if (scanned != null && scanned.isNotEmpty) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
                                       content: Text(
-                                        'Side saved (${_sessionRawTexts.length}). Rotate and scan the next face.',
+                                        'Angle $savedCount saved. New capture ready – add more or confirm.',
+                                      ),
+                                    ),
+                                  );
+                                } else if (savedCount > 0) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Angle $savedCount saved, but new capture was unclear. Try again.',
                                       ),
                                     ),
                                   );
                                 }
                               },
-                        icon: const Icon(Icons.cameraswitch_rounded),
-                        label: const Text('Save this side (optional)'),
                       ),
                     ),
-                  const SizedBox(height: 8),
+                    if (_sessionRawTexts.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          'Saved angles: ${_sessionRawTexts.length} (auto-applied on Confirm).',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurface
+                                    .withValues(alpha: 0.7),
+                              ),
+                        ),
+                      ),
+                    const SizedBox(height: 8),
+                  ],
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton(
@@ -1380,11 +1469,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
                                   _reviewAndSearch(
                                     preset: combinedClean,
                                     capturePhoto: false,
+                                    allowImageCheck: true,
                                   );
                                 } else {
                                   _executeSearch(
                                     combinedClean,
                                     rawOverride: combinedRaw,
+                                    skipImageCheck: false,
                                   );
                                 }
                               } else {
@@ -1402,6 +1493,23 @@ class _ScannerScreenState extends State<ScannerScreen> {
                                   ? 'Confirm'
                                   : 'Loading...',
                             ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.drive_file_rename_outline_rounded),
+                      label: const Text('Enter registration manually'),
+                      onPressed: _isCapturing
+                          ? null
+                          : () {
+                              _reviewAndSearch(
+                                preset: '',
+                                capturePhoto: false,
+                                allowImageCheck: false,
+                              );
+                            },
                     ),
                   ),
                 ],
