@@ -235,10 +235,23 @@ class _NotFoundScreenState extends State<NotFoundScreen> {
               child: ListTile(
                 leading: const Icon(Icons.image_search_rounded),
                 title: Text(widget.imageInfo?['product'] ?? 'Unrecognized product'),
-                subtitle: Text(
-                  'Category: ${widget.imageInfo?['category'] ?? 'unknown'}'
-                  '\nConfidence: ${(widget.imageInfo?['confidence'] ?? '--')}'
-                  '\nSource: ${widget.imageInfo?['source'] ?? 'n/a'}',
+                subtitle: Builder(
+                  builder: (_) {
+                    final verdict = widget.imageInfo?['verdict'] ?? '';
+                    final lines = <String>[];
+                    if (verdict.isNotEmpty) {
+                      final label = verdict[0].toUpperCase() + verdict.substring(1);
+                      lines.add('Verdict: $label');
+                    }
+                    lines.add(
+                      'Category: ${widget.imageInfo?['category'] ?? 'unknown'}',
+                    );
+                    lines.add(
+                      'Confidence: ${(widget.imageInfo?['confidence'] ?? '--')}',
+                    );
+                    lines.add('Source: ${widget.imageInfo?['source'] ?? 'n/a'}');
+                    return Text(lines.join('\n'));
+                  },
                 ),
               ),
             ),

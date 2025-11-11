@@ -627,7 +627,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   aboutBoxChildren: const [
                     SizedBox(height: 12),
                     Text(
-                      'Your first defense against fake medicines.',
+                      'Your first defense against suspicious packaging.',
                       style: TextStyle(fontWeight: FontWeight.w600),
                     ),
                     SizedBox(height: 8),

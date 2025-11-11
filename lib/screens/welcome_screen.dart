@@ -38,7 +38,7 @@ class WelcomeScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Your first defense against fake medicines.',
+                  'Your first defense against suspicious packaging.',
                   textAlign: TextAlign.center,
                   style: theme.textTheme.titleMedium?.copyWith(color: theme.hintColor),
                 ),

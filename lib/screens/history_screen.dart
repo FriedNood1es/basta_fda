@@ -77,6 +77,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 final e = items[i];
                 final brand = e.productInfo?['brand_name'];
                 final imageLabel = e.imageInfo?['product'];
+                final imageVerdict = e.imageInfo?['verdict'] ?? '';
+                final imageStatusLabel = imageVerdict.isNotEmpty
+                    ? '${imageVerdict[0].toUpperCase()}${imageVerdict.substring(1)}'
+                    : e.imageStatus.label;
                 final title = brand != null && brand.isNotEmpty
                     ? brand
                     : (imageLabel != null && imageLabel.isNotEmpty
@@ -88,7 +92,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 return ListTile(
                   title: Text(title),
                   subtitle: Text(
-                    '${e.registrationStatus.label} | Image ${e.imageStatus.label} - $ts',
+                    '${e.registrationStatus.label} | Image $imageStatusLabel - $ts',
                   ),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () {

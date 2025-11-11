@@ -12,7 +12,7 @@ import 'package:basta_fda/screens/not_found_screen.dart';
 import 'package:basta_fda/screens/history_screen.dart';
 import 'package:basta_fda/screens/settings_screen.dart';
 import 'package:basta_fda/services/history_service.dart';
-import 'package:basta_fda/services/mock_image_classifier.dart';
+import 'package:basta_fda/services/image_classifier.dart';
 import 'package:basta_fda/services/settings_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -53,6 +53,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
   final List<String> _sessionTexts = [];
   final List<String> _sessionRawTexts = [];
   bool _scopeNoticeShown = false;
+  bool _wideShotCaptured = false;
+  bool _regShotCaptured = false;
+  bool _pendingRegCapture = false;
+  bool _showCaptureGuide = false;
   // Nudge throttling
   DateTime? _lastNudgeAt;
   // Tap-to-focus + pinch-to-zoom
@@ -62,8 +66,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
   double _maxZoom = 1.0;
   double _currentZoom = 1.0;
   double _baseZoomForScale = 1.0;
-  final MockImageClassifier _imageClassifier =
-      MockImageClassifier.instance;
+  final PackagingImageClassifier _imageClassifier =
+      PackagingImageClassifier.instance;
+  String? _lastCapturedImagePath;
   String? _confirmedRegNumber;
 
   @override
@@ -115,15 +120,26 @@ class _ScannerScreenState extends State<ScannerScreen> {
         builder: (ctx) {
           final theme = Theme.of(ctx);
           return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.help_outline_rounded, size: 18),
+                    label: const Text('How to scan'),
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      setState(() => _showCaptureGuide = true);
+                    },
+                  ),
+                ),
+                Row(
+                  children: [
+                    Icon(
                         Icons.info_outline_rounded,
                         color: theme.colorScheme.primary,
                       ),
@@ -366,6 +382,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       } catch (_) {}
 
       final XFile file = await _controller!.takePicture();
+      _lastCapturedImagePath = file.path;
       final inputImage = InputImage.fromFilePath(file.path);
       final RecognizedText result = await _textRecognizer.processImage(
         inputImage,
@@ -384,6 +401,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
       if (!mounted) return scannedText;
       setState(() {
         _extractedText = scannedText;
+        if (_pendingRegCapture) {
+          _regShotCaptured = true;
+          _pendingRegCapture = false;
+        } else if (!_wideShotCaptured) {
+          _wideShotCaptured = true;
+        }
       });
       // Suggest adding another side if OCR looks incomplete and setting is enabled
       _maybeNudgeAddSide(rawText, scannedText);
@@ -561,85 +584,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      const header = Text(
-                        'Choose Registration Number',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      );
-                      if (regCandidates.isEmpty) {
-                        return header;
-                      }
-                      final manualButton = FilledButton.tonalIcon(
-                        onPressed: () async {
-                          final selected = await showDialog<String>(
-                            context: context,
-                            builder: (dialogCtx) {
-                              final manualController =
-                                  TextEditingController(text: working);
-                              return AlertDialog(
-                                title: const Text('Enter registration number'),
-                                content: TextField(
-                                  controller: manualController,
-                                  decoration: const InputDecoration(
-                                    hintText: 'Type registration number here',
-                                  ),
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.of(dialogCtx).pop(),
-                                    child: const Text('Cancel'),
-                                  ),
-                                  ElevatedButton(
-                                    onPressed: () => Navigator.of(dialogCtx)
-                                        .pop(manualController.text.trim()),
-                                    child: const Text('Use'),
-                                  ),
-                                ],
-                              );
-                            },
-                          );
-                          if (selected != null && selected.isNotEmpty) {
-                            if (!context.mounted) return;
-                            Navigator.of(ctx).pop();
-                            await _executeSearch(
-                              selected,
-                              rawOverride: selected,
-                              skipImageCheck: !imageAllowed,
-                            );
-                          }
-                        },
-                        icon: const Icon(Icons.edit_rounded, size: 18),
-                        label: const Text('Manual entry'),
-                      );
-                      if (constraints.maxWidth < 360) {
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            header,
-                            const SizedBox(height: 8),
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: manualButton,
-                            ),
-                          ],
-                        );
-                      }
-                      return Wrap(
-                        spacing: 12,
-                        runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        alignment: WrapAlignment.spaceBetween,
-                        children: [
-                          header,
-                          manualButton,
-                        ],
-                      );
-                    },
+                  const Text(
+                    'Choose Registration Number',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   if (regCandidates.isNotEmpty) ...[
@@ -706,7 +656,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     const SizedBox(height: 8),
                   ] else ...[
                     const Text(
-                      'No clear registration number detected.\nYou can enter it manually.',
+                      'No clear registration number detected.\nCapture another angle for clearer text.',
                     ),
                   ],
                   Row(
@@ -766,7 +716,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
       }
       try {
         return _imageClassifier
-            .classify(rawText: rawText, additionalText: text)
+            .classify(
+              rawText: rawText,
+              additionalText: text,
+              imagePath: _lastCapturedImagePath,
+            )
             .then((prediction) {
           if (prediction == null) {
             return const ImageCheckResult(
@@ -1029,6 +983,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 builder: (_) => SettingsScreen(fdaChecker: widget.fdaChecker),
               ),
             ),
+          ),
+          IconButton(
+            tooltip: 'How to scan',
+            icon: const Icon(Icons.help_outline_rounded),
+            onPressed: () => setState(() => _showCaptureGuide = true),
           ),
         ],
       ),
@@ -1380,9 +1339,15 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   ),
 
                   const SizedBox(height: 10),
+                  _CaptureStepper(
+                    wideDone: _wideShotCaptured,
+                    regDone: _regShotCaptured,
+                    onHelp: () => setState(() => _showCaptureGuide = true),
+                  ),
+                  const SizedBox(height: 12),
                   if (widget.fdaChecker.isLoaded) ...[
                     Text(
-                      'Need another angle? Capture again for stronger OCR.',
+                      'Step 2: zoom into the registration number for a close-up capture.',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Theme.of(context)
                                 .colorScheme
@@ -1394,8 +1359,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     Align(
                       alignment: Alignment.centerLeft,
                       child: TextButton.icon(
-                        icon: const Icon(Icons.add_a_photo_rounded, size: 18),
-                        label: const Text('Add another angle'),
+                        icon:
+                            const Icon(Icons.document_scanner_rounded, size: 18),
+                        label: const Text('Capture reg number close-up'),
                         onPressed: _isCapturing
                             ? null
                             : () async {
@@ -1405,13 +1371,16 @@ class _ScannerScreenState extends State<ScannerScreen> {
                                 if (clean.isNotEmpty) _sessionTexts.add(clean);
                                 if (raw.isNotEmpty) _sessionRawTexts.add(raw);
                                 final savedCount = _sessionRawTexts.length;
+                                setState(() {
+                                  _pendingRegCapture = true;
+                                });
                                 final scanned = await _scanFromPhoto();
                                 if (!context.mounted) return;
                                 if (scanned != null && scanned.isNotEmpty) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
                                       content: Text(
-                                        'Angle $savedCount saved. New capture ready – add more or confirm.',
+                                        'Close-up $savedCount saved. Capture again or confirm.',
                                       ),
                                     ),
                                   );
@@ -1419,7 +1388,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
                                       content: Text(
-                                        'Angle $savedCount saved, but new capture was unclear. Try again.',
+                                        'Close-up $savedCount saved, but new capture was unclear. Try again.',
                                       ),
                                     ),
                                   );
@@ -1495,29 +1464,258 @@ class _ScannerScreenState extends State<ScannerScreen> {
                             ),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.drive_file_rename_outline_rounded),
-                      label: const Text('Enter registration manually'),
-                      onPressed: _isCapturing
-                          ? null
-                          : () {
-                              _reviewAndSearch(
-                                preset: '',
-                                capturePhoto: false,
-                                allowImageCheck: false,
-                              );
-                            },
-                    ),
-                  ),
                 ],
               ),
             ),
           ),
+          if (_showCaptureGuide)
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () => setState(() => _showCaptureGuide = false),
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.7),
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Center(
+                    child: Card(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.camera_alt_rounded,
+                                  size: 26,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    'How scanning works',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                  ),
+                                ),
+                                IconButton(
+                                  onPressed: () => setState(
+                                    () => _showCaptureGuide = false,
+                                  ),
+                                  icon: const Icon(Icons.close_rounded),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            const _GuideStep(
+                              number: '1',
+                              title: 'Capture the whole label',
+                              body:
+                                  'Fit the entire front panel inside the frame so we can check packaging colors, logos, and seals.',
+                            ),
+                            const SizedBox(height: 12),
+                            const _GuideStep(
+                              number: '2',
+                              title: 'Zoom into the registration number',
+                              body:
+                                  'Move closer or pinch-to-zoom on the printed FDA registration code so OCR can read it clearly.',
+                            ),
+                            const SizedBox(height: 12),
+                            const _GuideStep(
+                              number: '3',
+                              title: 'Confirm to match FDA records',
+                              body:
+                                  'We combine both captures—text for registration, image for packaging—to verify authenticity.',
+                            ),
+                            const SizedBox(height: 18),
+                            SizedBox(
+                              width: double.infinity,
+                              child: FilledButton(
+                                onPressed: () => setState(
+                                  () => _showCaptureGuide = false,
+                                ),
+                                child: const Text('Got it'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
+    );
+  }
+}
+
+class _CaptureStepper extends StatelessWidget {
+  final bool wideDone;
+  final bool regDone;
+  final VoidCallback onHelp;
+
+  const _CaptureStepper({
+    required this.wideDone,
+    required this.regDone,
+    required this.onHelp,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _CaptureStepTile(
+                step: 'Step 1',
+                title: 'Packaging',
+                description: 'Fit the whole label inside the frame.',
+                done: wideDone,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _CaptureStepTile(
+                step: 'Step 2',
+                title: 'Reg number',
+                description: 'Zoom closer to the printed registration code.',
+                done: regDone,
+              ),
+            ),
+          ],
+        ),
+        TextButton.icon(
+          onPressed: onHelp,
+          icon: const Icon(Icons.help_outline_rounded, size: 18),
+          label: const Text('Need a refresher?'),
+        ),
+      ],
+    );
+  }
+}
+
+class _CaptureStepTile extends StatelessWidget {
+  final String step;
+  final String title;
+  final String description;
+  final bool done;
+
+  const _CaptureStepTile({
+    required this.step,
+    required this.title,
+    required this.description,
+    required this.done,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color =
+        done ? theme.colorScheme.primary : theme.colorScheme.outline;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+        color: color.withValues(alpha: done ? 0.16 : 0.05),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 12,
+                backgroundColor: color,
+                child: Text(
+                  done ? '✓' : step.split(' ').last,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            description,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GuideStep extends StatelessWidget {
+  final String number;
+  final String title;
+  final String body;
+
+  const _GuideStep({
+    required this.number,
+    required this.title,
+    required this.body,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        CircleAvatar(
+          radius: 16,
+          backgroundColor: theme.colorScheme.primary,
+          child: Text(
+            number,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                body,
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

@@ -73,7 +73,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Your first defense against fake medicines.',
+                              'Your first defense against suspicious packaging.',
                               style: theme.textTheme.bodyMedium?.copyWith(
                                 color: theme.hintColor,
                               ),
@@ -356,7 +356,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Your first defense against fake medicines.',
+                            'Your first defense against suspicious packaging.',
                             style: theme.textTheme.bodyMedium?.copyWith(
                               color: theme.hintColor,
                             ),

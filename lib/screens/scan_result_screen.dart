@@ -217,27 +217,34 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
     final imageInfo = _imageResult.info;
+    final imageVerdict = imageInfo?['verdict'] ?? '';
     final regNo = upperOrNA(productInfo['reg_no']);
     final sColor = statusColor(status, theme);
     final registrationColor =
         widget.registrationStatus == RegistrationStatus.registered
             ? Colors.green.shade600
             : theme.colorScheme.error;
+    final imageChipValue =
+        imageVerdict == 'suspicious' ? 'Suspicious' : _imageResult.status.label;
     Color imageColor;
-    switch (_imageResult.status) {
-      case ImageCheckStatus.recognized:
-        imageColor = theme.colorScheme.primary;
-        break;
-      case ImageCheckStatus.unrecognized:
-        imageColor = theme.colorScheme.tertiary;
-        break;
-      case ImageCheckStatus.failed:
-        imageColor = theme.colorScheme.error;
-        break;
-      case ImageCheckStatus.skipped:
-      case ImageCheckStatus.pending:
-        imageColor = theme.colorScheme.outline;
-        break;
+    if (imageVerdict == 'suspicious') {
+      imageColor = theme.colorScheme.error;
+    } else {
+      switch (_imageResult.status) {
+        case ImageCheckStatus.recognized:
+          imageColor = theme.colorScheme.primary;
+          break;
+        case ImageCheckStatus.unrecognized:
+          imageColor = theme.colorScheme.tertiary;
+          break;
+        case ImageCheckStatus.failed:
+          imageColor = theme.colorScheme.error;
+          break;
+        case ImageCheckStatus.skipped:
+        case ImageCheckStatus.pending:
+          imageColor = theme.colorScheme.outline;
+          break;
+      }
     }
     final imageProduct = imageInfo?['product'] ?? '';
     final imageCategory = imageInfo?['category'] ?? '';
@@ -318,15 +325,9 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                       ),
                       _StatusChip(
                         title: 'Image',
-                        value: _imageResult.status.label,
+                        value: imageChipValue,
                         color: imageColor,
                         icon: Icons.image_search_rounded,
-                      ),
-                      _StatusChip(
-                        title: 'FDA Verdict',
-                        value: status,
-                        color: sColor,
-                        icon: Icons.verified_rounded,
                       ),
                     ],
                   ),
@@ -504,6 +505,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                   subtitle: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (imageVerdict.isNotEmpty)
+                        Text('Verdict: ${titleCase(imageVerdict)}'),
                       if (imageCategory.isNotEmpty)
                         Text('Category: ${titleCase(imageCategory)}'),
                       if (imageConfidence.isNotEmpty)
@@ -703,6 +706,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                       status: status,
                       registrationStatus: widget.registrationStatus,
                       imageStatus: _imageResult.status,
+                      imageInfo: _imageResult.info,
                       confirmedRegNumber: widget.confirmedRegNumber,
                     ),
                   );
@@ -848,6 +852,7 @@ class _ReportProductSheet extends StatefulWidget {
 
   final RegistrationStatus registrationStatus;
   final ImageCheckStatus imageStatus;
+  final Map<String, String>? imageInfo;
   final String? confirmedRegNumber;
 
   const _ReportProductSheet({
@@ -855,6 +860,7 @@ class _ReportProductSheet extends StatefulWidget {
     required this.status,
     required this.registrationStatus,
     required this.imageStatus,
+    this.imageInfo,
     this.confirmedRegNumber,
   });
 
@@ -1384,6 +1390,9 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
 
                   child: OutlinedButton.icon(
                     onPressed: () async {
+                      final imageSummary = widget.imageInfo?['product'] ??
+                          widget.imageInfo?['verdict'] ??
+                          widget.imageStatus.label;
                       final summary = StringBuffer()
                         ..writeln('Suspicious Product Report')
                         ..writeln('')
@@ -1404,9 +1413,8 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
                           'Registration Status: ${widget.registrationStatus.label}',
                         )
                         ..writeln(
-                          'Image Check: ${widget.imageStatus.label}',
+                          'Image Check: $imageSummary',
                         )
-                        ..writeln('FDA Verdict: ${widget.status}')
                         ..writeln(
                           'Dosage: ${widget.productInfo['dosage_form'] ?? ''} ${widget.productInfo['dosage_strength'] ?? ''}',
                         )
@@ -1419,6 +1427,13 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
                         ..writeln(
                           'Country: ${widget.productInfo['country'] ?? ''}',
                         );
+                      final conf = widget.imageInfo?['confidence'];
+                      if (conf != null && conf.isNotEmpty) {
+                        summary
+                          ..writeln(
+                            'Image Confidence: $conf',
+                          );
+                      }
 
                       await Share.share(
                         summary.toString(),

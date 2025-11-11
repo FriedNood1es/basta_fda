@@ -1,0 +1,8 @@
+0 cosmetic_authentic
+1 cosmetic_suspicious
+2 food_authentic
+3 food_suspicious
+4 medicine_authentic
+5 medicine_suspicious
+6 supplement_authentic
+7 supplement_suspicious

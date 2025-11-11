@@ -361,7 +361,7 @@
  361                   aboutBoxChildren: const [
  362                     SizedBox(height: 12),
  363                     Text(
- 364                       'Your first defense against fake medicines.',
+ 364                       'Your first defense against suspicious packaging.',
  365                       style: TextStyle(fontWeight: FontWeight.w600),
  366                     ),
  367                     SizedBox(height: 8),
