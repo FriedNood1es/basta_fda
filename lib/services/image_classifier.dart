@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:basta_fda/data/packaging_trained_products.dart';
 
 class ImagePrediction {
   final String category;
@@ -10,6 +11,8 @@ class ImagePrediction {
   final double confidence;
   final String source;
   final String? verdict;
+  final double? authenticScore;
+  final double? suspiciousScore;
 
   const ImagePrediction({
     required this.category,
@@ -17,6 +20,8 @@ class ImagePrediction {
     required this.confidence,
     this.source = 'tflite',
     this.verdict,
+    this.authenticScore,
+    this.suspiciousScore,
   });
 
   Map<String, String> toMap() {
@@ -28,6 +33,12 @@ class ImagePrediction {
     };
     if (verdict != null && verdict!.isNotEmpty) {
       map['verdict'] = verdict!;
+    }
+    if (authenticScore != null) {
+      map['authenticScore'] = authenticScore!.toStringAsFixed(4);
+    }
+    if (suspiciousScore != null) {
+      map['suspiciousScore'] = suspiciousScore!.toStringAsFixed(4);
     }
     return map;
   }
@@ -127,6 +138,23 @@ class PackagingImageClassifier {
         return _classifyFromText(normalized);
       }
 
+      double authenticScore = 0;
+      double suspiciousScore = 0;
+      for (var i = 0; i < scores.length && i < _labels!.length; i++) {
+        final label = _parseLabel(_labels![i]);
+        final value = scores[i].isNaN ? 0.0 : scores[i];
+        if (label.isSuspicious) {
+          suspiciousScore += value;
+        } else {
+          authenticScore += value;
+        }
+      }
+      final sum = authenticScore + suspiciousScore;
+      if (sum > 0) {
+        authenticScore /= sum;
+        suspiciousScore /= sum;
+      }
+
       final labelInfo = _parseLabel(_labels![bestIndex]);
       final verdictText = labelInfo.isSuspicious
           ? 'Suspicious ${labelInfo.category.toLowerCase()} packaging'
@@ -138,6 +166,8 @@ class PackagingImageClassifier {
         confidence: confidence,
         source: 'tflite',
         verdict: labelInfo.isSuspicious ? 'suspicious' : 'authentic',
+        authenticScore: authenticScore.clamp(0.0, 1.0).toDouble(),
+        suspiciousScore: suspiciousScore.clamp(0.0, 1.0).toDouble(),
       );
     } catch (e, stack) {
       debugPrint('Image classification error: $e');
@@ -160,9 +190,9 @@ class PackagingImageClassifier {
           _inputWidth,
           (x) {
             final pixel = resized.getPixel(x, y);
-            final r = img.getRed(pixel) / 255.0;
-            final g = img.getGreen(pixel) / 255.0;
-            final b = img.getBlue(pixel) / 255.0;
+            final r = pixel.rNormalized.toDouble();
+            final g = pixel.gNormalized.toDouble();
+            final b = pixel.bNormalized.toDouble();
             if (_inputChannels <= 1) {
               final gray = (r + g + b) / 3;
               return [gray];
@@ -179,12 +209,12 @@ class PackagingImageClassifier {
   }
 
   ImagePrediction? _classifyFromText(String normalized) {
-    for (final sample in _samples) {
-      if (sample.matches(normalized)) {
+    for (final sample in PackagingCoverage.products) {
+      if (sample.matchesNormalizedText(normalized)) {
         return ImagePrediction(
           category: _titleCase(sample.category),
-          productName: sample.product,
-          confidence: sample.confidence,
+          productName: sample.name,
+          confidence: 0.92,
           source: 'text-heuristic',
           verdict: null,
         );
@@ -282,123 +312,3 @@ class _LabelInfo {
 
   bool get isSuspicious => status.contains('suspicious');
 }
-
-class _SampleProduct {
-  final String category;
-  final String product;
-  final List<String> keywords;
-  final double confidence;
-
-  const _SampleProduct({
-    required this.category,
-    required this.product,
-    required this.keywords,
-    this.confidence = 0.92,
-  });
-
-  bool matches(String text) => keywords.any(text.contains);
-}
-
-const List<_SampleProduct> _samples = [
-  _SampleProduct(
-    category: 'medicine',
-    product: 'Biogesic',
-    keywords: ['biogesic', 'paracetamol'],
-    confidence: 0.98,
-  ),
-  _SampleProduct(
-    category: 'medicine',
-    product: 'Bioflu',
-    keywords: ['bioflu', 'phenylephrine'],
-  ),
-  _SampleProduct(
-    category: 'medicine',
-    product: 'Alaxan',
-    keywords: ['alaxan', 'ibuprofen'],
-  ),
-  _SampleProduct(
-    category: 'medicine',
-    product: 'Neozep',
-    keywords: ['neozep', 'phenylpropanolamine'],
-  ),
-  _SampleProduct(
-    category: 'medicine',
-    product: 'Ascof Lagundi',
-    keywords: ['lagundi', 'ascof'],
-  ),
-  _SampleProduct(
-    category: 'food',
-    product: 'SkyFlakes Crackers',
-    keywords: ['skyflakes', 'cracker'],
-  ),
-  _SampleProduct(
-    category: 'food',
-    product: 'Bear Brand Milk',
-    keywords: ['bear brand', 'milk'],
-  ),
-  _SampleProduct(
-    category: 'food',
-    product: 'Lucky Me Pancit Canton',
-    keywords: ['lucky me', 'pancit canton'],
-  ),
-  _SampleProduct(
-    category: 'food',
-    product: 'Oreo Cookies',
-    keywords: ['oreo', 'cookie'],
-  ),
-  _SampleProduct(
-    category: 'food',
-    product: 'Milo Powder Drink',
-    keywords: ['milo', 'powder'],
-  ),
-  _SampleProduct(
-    category: 'supplement',
-    product: 'Myra E',
-    keywords: ['myra e', 'tocopheryl'],
-  ),
-  _SampleProduct(
-    category: 'supplement',
-    product: 'Enervon',
-    keywords: ['enervon'],
-  ),
-  _SampleProduct(
-    category: 'supplement',
-    product: 'Centrum Advance',
-    keywords: ['centrum'],
-  ),
-  _SampleProduct(
-    category: 'supplement',
-    product: 'Fern-C',
-    keywords: ['fern-c', 'ascorbic'],
-  ),
-  _SampleProduct(
-    category: 'supplement',
-    product: 'Potencee',
-    keywords: ['potencee'],
-  ),
-  _SampleProduct(
-    category: 'cosmetic',
-    product: "Pond's Facial Wash",
-    keywords: ['ponds', 'facial wash'],
-  ),
-  _SampleProduct(
-    category: 'cosmetic',
-    product: 'Olay Skin Cream',
-    keywords: ['olay', 'skin cream'],
-  ),
-  _SampleProduct(
-    category: 'cosmetic',
-    product: 'Nivea Sun Protect',
-    keywords: ['nivea', 'sunblock', 'sun protect'],
-  ),
-  _SampleProduct(
-    category: 'cosmetic',
-    product: 'Belo Kojic Soap',
-    keywords: ['belo', 'kojic'],
-  ),
-  _SampleProduct(
-    category: 'cosmetic',
-    product: 'Celeteque Hydration',
-    keywords: ['celeteque', 'hydration'],
-  ),
-];

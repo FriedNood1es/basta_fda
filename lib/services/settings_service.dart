@@ -7,12 +7,10 @@ class SettingsService {
   static final SettingsService instance = SettingsService._();
 
   bool _loaded = false;
-  bool liveOcrDefault = false;
   bool reviewBeforeSearch = true;
   bool strictMatching = true;
   bool wifiOnlyUpdates = false;
   // Suggest adding another package side after a scan when OCR evidence looks incomplete
-  bool smartAddSidePrompt = true;
   bool hasSeenWelcome = false;
   bool hasSeenScopeNotice = false;
   bool isLoggedIn = false;
@@ -39,11 +37,9 @@ class SettingsService {
       if (await f.exists()) {
         final raw = await f.readAsString();
         final json = jsonDecode(raw) as Map<String, dynamic>;
-        liveOcrDefault = (json['liveOcrDefault'] ?? false) as bool;
         reviewBeforeSearch = (json['reviewBeforeSearch'] ?? true) as bool;
         strictMatching = (json['strictMatching'] ?? true) as bool;
         wifiOnlyUpdates = (json['wifiOnlyUpdates'] ?? false) as bool;
-        smartAddSidePrompt = (json['smartAddSidePrompt'] ?? true) as bool;
         hasSeenWelcome = (json['hasSeenWelcome'] ?? false) as bool;
         hasSeenScopeNotice = (json['hasSeenScopeNotice'] ?? false) as bool;
         isLoggedIn = (json['isLoggedIn'] ?? false) as bool;
@@ -73,11 +69,9 @@ class SettingsService {
   Future<void> save() async {
     final f = await _file();
     final data = jsonEncode({
-      'liveOcrDefault': liveOcrDefault,
       'reviewBeforeSearch': reviewBeforeSearch,
       'strictMatching': strictMatching,
       'wifiOnlyUpdates': wifiOnlyUpdates,
-      'smartAddSidePrompt': smartAddSidePrompt,
       'hasSeenWelcome': hasSeenWelcome,
       'hasSeenScopeNotice': hasSeenScopeNotice,
       'isLoggedIn': isLoggedIn,
@@ -94,3 +88,4 @@ class SettingsService {
     await f.writeAsString(data, flush: true);
   }
 }
+

@@ -1,20 +1,18 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart'
-    show Clipboard, ClipboardData, HapticFeedback;
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:basta_fda/models/scan_verdict.dart';
 import 'package:basta_fda/services/fda_checker.dart';
 import 'package:basta_fda/screens/scan_result_screen.dart';
-import 'package:basta_fda/screens/not_found_screen.dart';
 import 'package:basta_fda/screens/history_screen.dart';
 import 'package:basta_fda/screens/settings_screen.dart';
 import 'package:basta_fda/services/history_service.dart';
 import 'package:basta_fda/services/image_classifier.dart';
 import 'package:basta_fda/services/settings_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:basta_fda/data/packaging_trained_products.dart';
 
 class ScannerScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
@@ -30,35 +28,24 @@ class ScannerScreen extends StatefulWidget {
   State<ScannerScreen> createState() => _ScannerScreenState();
 }
 
+enum _CaptureStep { packaging, regNumber }
+
 class _ScannerScreenState extends State<ScannerScreen> {
   CameraController? _controller;
   bool _isInitialized = false;
-  // Removed _streaming flag (was unused)
-  bool _isBusy = false;
   bool _isMatching = false;
-  final bool _paused = false;
   bool _torchOn = false;
-  bool _liveMode = false; // Lens-like live OCR (off by default)
   String _extractedText = "";
-  List<String> _suggestions = [];
-  Size? _imageSize;
   final TextRecognizer _textRecognizer = TextRecognizer(
     script: TextRecognitionScript.latin,
   );
-  Timer? _debounce;
   bool _isCapturing = false;
-  bool _showExtractedExpanded = false;
   String? _lastRawText; // keep last raw OCR text for Reg No extraction
-  // Multi-angle capture session (accumulate OCR from multiple sides)
-  final List<String> _sessionTexts = [];
-  final List<String> _sessionRawTexts = [];
   bool _scopeNoticeShown = false;
   bool _wideShotCaptured = false;
   bool _regShotCaptured = false;
   bool _pendingRegCapture = false;
   bool _showCaptureGuide = false;
-  // Nudge throttling
-  DateTime? _lastNudgeAt;
   // Tap-to-focus + pinch-to-zoom
   Offset? _lastFocusTap;
   DateTime? _lastFocusAt;
@@ -70,7 +57,20 @@ class _ScannerScreenState extends State<ScannerScreen> {
       PackagingImageClassifier.instance;
   String? _lastCapturedImagePath;
   String? _confirmedRegNumber;
+  _CaptureStep _activeCaptureStep = _CaptureStep.packaging;
+  bool _packageCaptureSkipped = false;
+  bool _regCaptureSkipped = false;
 
+  bool get _hasCompletedPackaging =>
+      _packageCaptureSkipped || _wideShotCaptured;
+
+  bool get _hasCompletedRegStep =>
+      _regCaptureSkipped || _regShotCaptured;
+
+  bool get _canConfirmFlow =>
+      widget.fdaChecker.isLoaded &&
+      _hasCompletedPackaging &&
+      _hasCompletedRegStep;
   @override
   void initState() {
     super.initState();
@@ -78,15 +78,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     // Load user settings
     SettingsService.instance.load().then((_) {
       if (!mounted) return;
-      setState(() {
-        _liveMode = SettingsService.instance.liveOcrDefault;
-      });
-      // Auto-start/stop live OCR stream based on setting
-      if (_liveMode) {
-        _startStream();
-      } else {
-        _stopStream();
-      }
       // Ensure history is scoped to the current session (guest vs user)
       try {
         final user = FirebaseAuth.instance.currentUser;
@@ -177,6 +168,23 @@ class _ScannerScreenState extends State<ScannerScreen> {
     });
   }
 
+  void _resetCaptureFlow({bool clearText = false}) {
+    setState(() {
+      _wideShotCaptured = false;
+      _regShotCaptured = false;
+      _packageCaptureSkipped = false;
+      _regCaptureSkipped = false;
+      _pendingRegCapture = false;
+      _activeCaptureStep = _CaptureStep.packaging;
+      _lastCapturedImagePath = null;
+      if (clearText) {
+        _extractedText = '';
+        _lastRawText = null;
+      }
+    });
+  }
+
+
   Future<void> _initCamera() async {
     _controller = CameraController(
       widget.cameras.first,
@@ -201,80 +209,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
     // Do not start stream by default to avoid ImageReader buffer pressure.
   }
 
-  Future<void> _startStream() async {
-    if (!mounted ||
-        _controller == null ||
-        _controller!.value.isStreamingImages) {
-      return;
-    }
-    await _controller!.startImageStream(_onImage);
-  }
-
   Future<void> _stopStream() async {
     if (_controller != null && _controller!.value.isStreamingImages) {
       await _controller!.stopImageStream();
-    }
-  }
-
-  Future<void> _onImage(CameraImage cameraImage) async {
-    if (_paused || !_liveMode || _isBusy) return;
-    if (_debounce?.isActive ?? false) return;
-    _debounce = Timer(const Duration(milliseconds: 350), () {});
-    _isBusy = true;
-
-    _imageSize ??= Size(
-      cameraImage.width.toDouble(),
-      cameraImage.height.toDouble(),
-    );
-
-    try {
-      final WriteBuffer allBytes = WriteBuffer();
-      for (final Plane plane in cameraImage.planes) {
-        allBytes.putUint8List(plane.bytes);
-      }
-      final bytes = allBytes.done().buffer.asUint8List();
-
-      final imageRotation =
-          InputImageRotationValue.fromRawValue(
-            _controller!.description.sensorOrientation,
-          ) ??
-          InputImageRotation.rotation0deg;
-      final format =
-          InputImageFormatValue.fromRawValue(cameraImage.format.raw) ??
-          InputImageFormat.nv21;
-
-      final inputImage = InputImage.fromBytes(
-        bytes: bytes,
-        metadata: InputImageMetadata(
-          size: Size(
-            cameraImage.width.toDouble(),
-            cameraImage.height.toDouble(),
-          ),
-          rotation: imageRotation,
-          format: format,
-          bytesPerRow: cameraImage.planes.first.bytesPerRow,
-        ),
-      );
-
-      final RecognizedText result = await _textRecognizer.processImage(
-        inputImage,
-      );
-      final rawText = result.text;
-      final scannedText = cleanText(rawText);
-
-      // Keep logs minimal in live mode to reduce overhead
-
-      final suggestions = _extractSuggestions(result);
-
-      if (!mounted) return;
-      setState(() {
-        _extractedText = scannedText;
-        _suggestions = suggestions;
-      });
-    } catch (_) {
-      // ignore
-    } finally {
-      _isBusy = false;
     }
   }
 
@@ -399,17 +336,21 @@ class _ScannerScreenState extends State<ScannerScreen> {
       debugPrint('----- OCR CLEANED TEXT END -----');
 
       if (!mounted) return scannedText;
+      final bool treatAsRegCapture =
+          _pendingRegCapture || _activeCaptureStep == _CaptureStep.regNumber;
       setState(() {
         _extractedText = scannedText;
-        if (_pendingRegCapture) {
+        if (treatAsRegCapture) {
           _regShotCaptured = true;
           _pendingRegCapture = false;
-        } else if (!_wideShotCaptured) {
+          _activeCaptureStep = _CaptureStep.regNumber;
+        } else {
           _wideShotCaptured = true;
+          if (!_regShotCaptured && !_regCaptureSkipped) {
+            _activeCaptureStep = _CaptureStep.regNumber;
+          }
         }
       });
-      // Suggest adding another side if OCR looks incomplete and setting is enabled
-      _maybeNudgeAddSide(rawText, scannedText);
       return scannedText;
     } catch (e) {
       debugPrint('OCR photo scan error: $e');
@@ -417,10 +358,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     } finally {
       if (mounted) {
         setState(() => _isCapturing = false);
-        // Resume stream for live UI only if live mode is enabled
-        if (_liveMode) {
-          await _startStream();
-        }
         try {
           await _controller!.unlockCaptureOrientation();
         } catch (_) {}
@@ -428,110 +365,102 @@ class _ScannerScreenState extends State<ScannerScreen> {
     }
   }
 
-  bool _shouldNudgeForAnotherSide(String raw, String clean) {
-    // If a reg-like code is present, we already have strong evidence
-    final hasReg = widget.fdaChecker.regCandidates(raw).isNotEmpty;
-    if (hasReg) return false;
-
-    final rawL = raw.toLowerCase();
-    final cleanL = clean.toLowerCase();
-
-    // Evidence cues
-    final hasStrength =
-        RegExp(r"\b\d+(?:\.\d+)?\s*(mg|g|mcg)\b").hasMatch(rawL) ||
-        cleanL.contains('mg');
-    final hasForm = [
-      'tablet',
-      'capsule',
-      'syrup',
-      'cream',
-      'ointment',
-      'solution',
-      'suspension',
-      'injection',
-    ].any((t) => cleanL.contains(t));
-    final hasParty =
-        rawL.contains('manufactured by') ||
-        rawL.contains('manufacturer') ||
-        rawL.contains('distributed by') ||
-        rawL.contains('distributor');
-    final hasExpiryCue =
-        rawL.contains('exp') ||
-        rawL.contains('expiry') ||
-        rawL.contains('expiration');
-
-    int cues = 0;
-    if (hasStrength) cues++;
-    if (hasForm) cues++;
-    if (hasParty) cues++;
-    if (hasExpiryCue) cues++;
-
-    // Very short text likely incomplete
-    final tooShort = cleanL.length < 30;
-
-    // Nudge when there is low evidence
-    return cues < 2 || tooShort;
+  Future<void> _startPackagingCapture() async {
+    if (_isCapturing) return;
+    setState(() {
+      _activeCaptureStep = _CaptureStep.packaging;
+      _packageCaptureSkipped = false;
+      _pendingRegCapture = false;
+    });
+    final result = await _scanFromPhoto();
+    if (!mounted) return;
+    if (result != null && result.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _wideShotCaptured ? 'Packaging updated.' : 'Packaging captured.',
+          ),
+        ),
+      );
+      if (!_regShotCaptured && !_regCaptureSkipped) {
+        setState(() => _activeCaptureStep = _CaptureStep.regNumber);
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not capture packaging clearly. Try again.'),
+        ),
+      );
+    }
   }
 
-  void _maybeNudgeAddSide(String raw, String clean) {
-    final s = SettingsService.instance;
-    if (!s.smartAddSidePrompt) return;
-    if (!_shouldNudgeForAnotherSide(raw, clean)) return;
-    final now = DateTime.now();
-    if (_lastNudgeAt != null &&
-        now.difference(_lastNudgeAt!) < const Duration(seconds: 10)) {
-      return;
-    }
-    _lastNudgeAt = now;
+  Future<void> _startRegCapture() async {
+    if (_isCapturing) return;
+    setState(() {
+      _activeCaptureStep = _CaptureStep.regNumber;
+      _regCaptureSkipped = false;
+      _pendingRegCapture = true;
+    });
+    final result = await _scanFromPhoto();
     if (!mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(
-      SnackBar(
-        content: const Text(
-          'Want better results? Save this side and scan another?',
+    if (result != null && result.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Reg capture saved.'),
         ),
-        action: SnackBarAction(
-          label: 'Save side',
-          onPressed: () {
-            final cleanTxt = _extractedText.trim();
-            final rawTxt = (_lastRawText ?? _extractedText).trim();
-            if (cleanTxt.isNotEmpty) _sessionTexts.add(cleanTxt);
-            if (rawTxt.isNotEmpty) _sessionRawTexts.add(rawTxt);
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Side saved (${_sessionRawTexts.length})'),
-                ),
-              );
-            }
-          },
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Reg capture looked unclear. Try again.'),
         ),
-        duration: const Duration(seconds: 6),
+      );
+    }
+  }
+
+  void _skipPackagingCapture() {
+    setState(() {
+      _packageCaptureSkipped = true;
+      _wideShotCaptured = false;
+      _activeCaptureStep = _CaptureStep.regNumber;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Packaging image check skipped.'),
       ),
     );
   }
 
-  List<String> _extractSuggestions(RecognizedText result) {
-    final List<String> collect = [];
-    final imgW = _imageSize?.width ?? 1;
-    final imgH = _imageSize?.height ?? 1;
-    final roi = Rect.fromLTWH(
-      imgW * 0.2,
-      imgH * 0.325,
-      imgW * 0.6,
-      imgH * 0.35,
+  void _resumePackagingCapture() {
+    setState(() {
+      _packageCaptureSkipped = false;
+      _activeCaptureStep = _CaptureStep.packaging;
+    });
+  }
+
+  void _skipRegCapture() {
+    setState(() {
+      _regCaptureSkipped = true;
+      _regShotCaptured = false;
+      _activeCaptureStep = _CaptureStep.regNumber;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Reg capture skipped. We will use OCR text.'),
+      ),
     );
-    for (final block in result.blocks) {
-      final box = block.boundingBox;
-      if (roi.overlaps(box)) {
-        final text = cleanText(block.text);
-        for (final t in text.split(' ')) {
-          if (t.length >= 4 && !collect.contains(t)) collect.add(t);
-        }
-      }
-    }
-    collect.sort((a, b) => b.length.compareTo(a.length));
-    return collect.take(8).toList();
+  }
+
+  void _resumeRegCapture() {
+    setState(() {
+      _regCaptureSkipped = false;
+      _activeCaptureStep = _CaptureStep.regNumber;
+    });
+  }
+
+  Future<void> _confirmScan() async {
+    if (!_canConfirmFlow || _isCapturing || _isMatching) return;
+    await _matchScannedText();
   }
 
   Future<void> _matchScannedText() async {
@@ -549,6 +478,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   Future<void> _reviewAndSearch({
     String? preset,
+    String? rawOverride,
     bool capturePhoto = true,
     bool allowImageCheck = true,
   }) async {
@@ -556,6 +486,15 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final first = capturePhoto ? await _scanFromPhoto() : preset;
     if (!mounted) return;
     String working = first ?? _extractedText;
+
+    if (_regCaptureSkipped) {
+      await _executeSearch(
+        working,
+        rawOverride: rawOverride ?? _lastRawText ?? working,
+        skipImageCheck: !allowImageCheck || _packageCaptureSkipped,
+      );
+      return;
+    }
 
     await showModalBottomSheet(
       context: context,
@@ -567,7 +506,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       builder: (ctx) {
         final bool imageAllowed = allowImageCheck;
         // Detect Reg. No. candidates from raw or current text
-        final rawForReg = _lastRawText ?? working;
+        final rawForReg = rawOverride ?? _lastRawText ?? working;
         final regCandidates = widget.fdaChecker.regCandidates(rawForReg);
         final padding = EdgeInsets.only(
           bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
@@ -600,42 +539,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
                           ),
                     ),
                     const SizedBox(height: 6),
-                    if (_sessionRawTexts.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6, bottom: 8),
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            children: _sessionRawTexts.asMap().entries.map((
-                              entry,
-                            ) {
-                              final idx = entry.key + 1;
-                              final sample = entry.value.trim();
-                              final preview = sample.length > 24
-                                  ? "${sample.substring(0, 24)}..."
-                                  : sample;
-                              return Padding(
-                                padding: const EdgeInsets.only(right: 8),
-                                child: Chip(
-                                  label: Text("Side $idx - $preview"),
-                                  deleteIcon: const Icon(
-                                    Icons.close_rounded,
-                                    size: 16,
-                                  ),
-                                  onDeleted: () {
-                                    setState(() {
-                                      _sessionRawTexts.removeAt(idx - 1);
-                                      if (idx - 1 < _sessionTexts.length) {
-                                        _sessionTexts.removeAt(idx - 1);
-                                      }
-                                    });
-                                  },
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      ),
                     Wrap(
                       spacing: 8,
                       runSpacing: -6,
@@ -704,8 +607,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }) async {
     if (_isMatching) return;
     _isMatching = true;
-    String? followUpText;
-    Future<void> Function()? followUpAction;
     bool dialogShown = false;
 
     Future<ImageCheckResult> resolveImageCheck(String rawText) {
@@ -760,11 +661,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
         _confirmedRegNumber = raw;
       }
 
-      final imageResultFuture = resolveImageCheck(raw);
-      final initialImageResult = skipImageCheck
-          ? const ImageCheckResult(status: ImageCheckStatus.skipped)
-          : const ImageCheckResult(status: ImageCheckStatus.pending);
-
       final byReg = widget.fdaChecker.findByRegNo(raw);
       final regLike =
           RegExp(r'\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b').hasMatch(raw) ||
@@ -783,8 +679,32 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
       if (!mounted) return;
 
+      late final Future<ImageCheckResult> imageResultFuture;
+      late final ImageCheckResult initialImageResult;
+      Map<String, String>? nonNullProduct;
+      bool isImageTrainedProduct = false;
+
       if (matchedProduct != null) {
-        final nonNullProduct = Map<String, String>.from(matchedProduct);
+        nonNullProduct = Map<String, String>.from(matchedProduct);
+        isImageTrainedProduct =
+            PackagingCoverage.matchesProduct(nonNullProduct);
+
+        if (skipImageCheck) {
+          imageResultFuture = Future.value(
+              const ImageCheckResult(status: ImageCheckStatus.skipped));
+          initialImageResult =
+              const ImageCheckResult(status: ImageCheckStatus.skipped);
+        } else if (!isImageTrainedProduct) {
+          imageResultFuture = Future.value(
+              const ImageCheckResult(status: ImageCheckStatus.unrecognized));
+          initialImageResult =
+              const ImageCheckResult(status: ImageCheckStatus.unrecognized);
+        } else {
+          imageResultFuture = resolveImageCheck(raw);
+          initialImageResult =
+              const ImageCheckResult(status: ImageCheckStatus.pending);
+        }
+
         final eval = widget.fdaChecker.evaluateScan(
           raw: raw,
           product: nonNullProduct,
@@ -859,67 +779,104 @@ class _ScannerScreenState extends State<ScannerScreen> {
               registrationStatus: registrationStatus,
               imageStatus: imageResult.status,
               regNumber: _confirmedRegNumber,
+              imageTrainedProduct: isImageTrainedProduct,
             );
           }),
         );
 
         if (!mounted) return;
-        Navigator.push(
+        await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => ScanResultScreen(
-              productInfo: nonNullProduct,
+              productInfo: nonNullProduct!,
               status: status,
               registrationStatus: registrationStatus,
               initialImageResult: initialImageResult,
               imageResultFuture: imageResultFuture,
               confirmedRegNumber: _confirmedRegNumber,
+              isImageTrainedProduct: isImageTrainedProduct,
             ),
           ),
         );
-        _sessionTexts.clear();
-        _sessionRawTexts.clear();
+        _resetCaptureFlow(clearText: true);
       } else {
+        if (skipImageCheck) {
+          imageResultFuture = Future.value(
+              const ImageCheckResult(status: ImageCheckStatus.skipped));
+          initialImageResult =
+              const ImageCheckResult(status: ImageCheckStatus.skipped);
+        } else {
+          imageResultFuture = resolveImageCheck(raw);
+          initialImageResult =
+              const ImageCheckResult(status: ImageCheckStatus.pending);
+        }
+
         if (dialogShown && Navigator.canPop(context)) {
           Navigator.of(context).pop();
           dialogShown = false;
           await Future<void>.delayed(Duration.zero);
         }
         final imageResult = await imageResultFuture;
-        await HistoryService.instance.addEntry(
-          scannedText: raw,
-          productInfo: null,
-          status: 'NOT FOUND',
-          imageInfo: imageResult.info,
-          registrationStatus: RegistrationStatus.unregistered,
-          imageStatus: imageResult.status,
-          regNumber: _confirmedRegNumber,
-        );
-        if (!mounted) return;
-        final returned = await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => NotFoundScreen(
-              scannedText: raw,
-              fdaChecker: widget.fdaChecker,
-              imageInfo: imageResult.info,
-              imageStatus: imageResult.status,
-            ),
-          ),
-        );
-        if (!mounted) return;
-        if (returned is String && returned.isNotEmpty) {
-          setState(() => _extractedText = returned);
-          final wantsReview = SettingsService.instance.reviewBeforeSearch;
-          if (wantsReview) {
-            followUpAction = () => _reviewAndSearch(
-                  preset: returned,
-                  capturePhoto: false,
-                  allowImageCheck: false,
-                );
-          } else {
-            followUpText = returned;
+        final imageRecognized = imageResult.status == ImageCheckStatus.recognized &&
+            (imageResult.info?['product']?.isNotEmpty ?? false);
+
+        if (_regCaptureSkipped && imageRecognized) {
+          final info = imageResult.info ?? {};
+          final productName = info['product'] ?? 'Packaging match';
+          final verdict = info['verdict'];
+          final pseudoProduct = <String, String>{
+            'brand_name': productName,
+            'generic_name': productName,
+            'match_reason': 'Packaging helper recognized this product.',
+          };
+          if (verdict != null && verdict.isNotEmpty) {
+            pseudoProduct['verification_reasons'] =
+                'Image verdict: ${verdict[0].toUpperCase()}${verdict.substring(1)}';
           }
+          await HistoryService.instance.addEntry(
+            scannedText: raw,
+            productInfo: pseudoProduct,
+            status: 'IMAGE_ONLY',
+            imageInfo: info,
+            registrationStatus: RegistrationStatus.unregistered,
+            imageStatus: imageResult.status,
+            regNumber: _confirmedRegNumber,
+            imageTrainedProduct: true,
+          );
+          if (!mounted) return;
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ScanResultScreen(
+                productInfo: pseudoProduct,
+                status: 'IMAGE_ONLY',
+                registrationStatus: RegistrationStatus.unregistered,
+                initialImageResult: imageResult,
+                imageResultFuture: null,
+                confirmedRegNumber: _confirmedRegNumber,
+                isImageTrainedProduct: true,
+              ),
+            ),
+          );
+          _resetCaptureFlow(clearText: false);
+        } else {
+          await HistoryService.instance.addEntry(
+            scannedText: raw,
+            productInfo: null,
+            status: 'NOT FOUND',
+            imageInfo: imageResult.info,
+            registrationStatus: RegistrationStatus.unregistered,
+            imageStatus: imageResult.status,
+            regNumber: _confirmedRegNumber,
+          );
+          if (!mounted) return;
+          setState(() => _extractedText = raw);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No FDA match found. Edit the text or scan again.'),
+            ),
+          );
         }
       }
     } finally {
@@ -929,14 +886,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _isMatching = false;
     }
 
-    if (followUpAction != null) {
-      await followUpAction();
-    } else if (followUpText != null) {
-      await _executeSearch(
-        followUpText,
-        skipImageCheck: true,
-      );
-    }
   }
 
   String cleanText(String input) {
@@ -951,7 +900,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
   void dispose() {
     _stopStream();
     _textRecognizer.close();
-    _debounce?.cancel();
     _controller?.dispose();
     super.dispose();
   }
@@ -964,6 +912,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
     return Scaffold(
       appBar: AppBar(
+        centerTitle: true,
         title: const Text('Scan Product'),
         actions: [
           IconButton(
@@ -1043,34 +992,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
             ),
           ),
 
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 160,
-            child: IgnorePointer(
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.45),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: const Text(
-                    'Keep the registration text inside the frame',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-
           // Small banner to indicate FDA DB loading state or staleness
           if (!widget.fdaChecker.isLoaded)
             Positioned(
@@ -1097,7 +1018,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     ),
                     SizedBox(width: 8),
                     Text(
-                      'Loading FDA data…',
+                      'Loading FDA data?',
                       style: TextStyle(color: Colors.white),
                     ),
                   ],
@@ -1113,7 +1034,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 onTap: () async {
                   final messenger = ScaffoldMessenger.of(context);
                   messenger.showSnackBar(
-                    const SnackBar(content: Text('Checking for FDA updates…')),
+                    const SnackBar(content: Text('Checking for FDA updates?')),
                   );
                   await widget.fdaChecker.ensureLoadedAndFresh();
                   if (!mounted) return;
@@ -1196,277 +1117,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
             left: 0,
             right: 0,
             bottom: 0,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Theme.of(
-                  context,
-                ).colorScheme.surface.withValues(alpha: 0.92),
-                border: Border(
-                  top: BorderSide(color: Theme.of(context).dividerColor),
-                ),
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(16),
-                ),
-                boxShadow: const [
-                  BoxShadow(blurRadius: 12, color: Colors.black26),
-                ],
-              ),
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      'Keep the label text inside the frame. We match it to FDA records, but you should still inspect for tampering.',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.onSurface.withValues(alpha: 0.7),
-                      ),
-                    ),
-                  ),
-                  // Extracted text viewer (cleaned), with copy and expand controls
-                  if (_extractedText.isNotEmpty) ...[
-                    Card(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      color: Theme.of(context).colorScheme.surface,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(10),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Text(
-                                  'Extracted Text',
-                                  style: Theme.of(context).textTheme.titleSmall
-                                      ?.copyWith(fontWeight: FontWeight.w600),
-                                ),
-                                const Spacer(),
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.copy_rounded,
-                                    size: 18,
-                                  ),
-                                  tooltip: 'Copy',
-                                  onPressed: () async {
-                                    await Clipboard.setData(
-                                      ClipboardData(text: _extractedText),
-                                    );
-                                    if (context.mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'Extracted text copied',
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                  },
-                                ),
-                                IconButton(
-                                  icon: Icon(
-                                    _showExtractedExpanded
-                                        ? Icons.expand_less_rounded
-                                        : Icons.expand_more_rounded,
-                                    size: 20,
-                                  ),
-                                  tooltip: _showExtractedExpanded
-                                      ? 'Collapse'
-                                      : 'Expand',
-                                  onPressed: () => setState(
-                                    () => _showExtractedExpanded =
-                                        !_showExtractedExpanded,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            AnimatedCrossFade(
-                              crossFadeState: _showExtractedExpanded
-                                  ? CrossFadeState.showSecond
-                                  : CrossFadeState.showFirst,
-                              duration: const Duration(milliseconds: 180),
-                              firstChild: Text(
-                                _extractedText,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.bodyMedium,
-                              ),
-                              secondChild: ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  maxHeight: 120,
-                                ),
-                                child: SingleChildScrollView(
-                                  child: Text(
-                                    _extractedText,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodyMedium,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: -6,
-                    children: _suggestions.take(6).map((t) {
-                      return FilterChip(
-                        label: Text(t),
-                        selected: _extractedText.contains(t),
-                        showCheckmark: false,
-                        onSelected: (_) {
-                          setState(() {
-                            _extractedText = (_extractedText.isEmpty
-                                ? t
-                                : '$_extractedText $t');
-                          });
-                        },
-                      );
-                    }).toList(),
-                  ),
-
-                  const SizedBox(height: 10),
-                  _CaptureStepper(
-                    wideDone: _wideShotCaptured,
-                    regDone: _regShotCaptured,
-                    onHelp: () => setState(() => _showCaptureGuide = true),
-                  ),
-                  const SizedBox(height: 12),
-                  if (widget.fdaChecker.isLoaded) ...[
-                    Text(
-                      'Step 2: zoom into the registration number for a close-up capture.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurface
-                                .withValues(alpha: 0.7),
-                          ),
-                    ),
-                    const SizedBox(height: 6),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        icon:
-                            const Icon(Icons.document_scanner_rounded, size: 18),
-                        label: const Text('Capture reg number close-up'),
-                        onPressed: _isCapturing
-                            ? null
-                            : () async {
-                                final clean = _extractedText.trim();
-                                final raw =
-                                    (_lastRawText ?? _extractedText).trim();
-                                if (clean.isNotEmpty) _sessionTexts.add(clean);
-                                if (raw.isNotEmpty) _sessionRawTexts.add(raw);
-                                final savedCount = _sessionRawTexts.length;
-                                setState(() {
-                                  _pendingRegCapture = true;
-                                });
-                                final scanned = await _scanFromPhoto();
-                                if (!context.mounted) return;
-                                if (scanned != null && scanned.isNotEmpty) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Close-up $savedCount saved. Capture again or confirm.',
-                                      ),
-                                    ),
-                                  );
-                                } else if (savedCount > 0) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Close-up $savedCount saved, but new capture was unclear. Try again.',
-                                      ),
-                                    ),
-                                  );
-                                }
-                              },
-                      ),
-                    ),
-                    if (_sessionRawTexts.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text(
-                          'Saved angles: ${_sessionRawTexts.length} (auto-applied on Confirm).',
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurface
-                                    .withValues(alpha: 0.7),
-                              ),
-                        ),
-                      ),
-                    const SizedBox(height: 8),
-                  ],
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: _isCapturing || !widget.fdaChecker.isLoaded
-                          ? null
-                          : () {
-                              if (_sessionRawTexts.isNotEmpty ||
-                                  _sessionTexts.isNotEmpty) {
-                                final combinedRaw =
-                                    ([..._sessionRawTexts, _lastRawText ?? '']
-                                            .where((s) => s.trim().isNotEmpty)
-                                            .join(' '))
-                                        .trim();
-                                final combinedClean =
-                                    ([..._sessionTexts, _extractedText]
-                                            .where((s) => s.trim().isNotEmpty)
-                                            .join(' '))
-                                        .trim();
-                                final wantsReview =
-                                    SettingsService.instance.reviewBeforeSearch;
-                                if (wantsReview) {
-                                  _reviewAndSearch(
-                                    preset: combinedClean,
-                                    capturePhoto: false,
-                                    allowImageCheck: true,
-                                  );
-                                } else {
-                                  _executeSearch(
-                                    combinedClean,
-                                    rawOverride: combinedRaw,
-                                    skipImageCheck: false,
-                                  );
-                                }
-                              } else {
-                                _matchScannedText();
-                              }
-                            },
-                      child: _isCapturing
-                          ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : Text(
-                              widget.fdaChecker.isLoaded
-                                  ? 'Confirm'
-                                  : 'Loading...',
-                            ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            child: _buildCaptureControlsOverlay(context),
           ),
           if (_showCaptureGuide)
             Positioned.fill(
@@ -1515,23 +1166,23 @@ class _ScannerScreenState extends State<ScannerScreen> {
                             const SizedBox(height: 16),
                             const _GuideStep(
                               number: '1',
-                              title: 'Capture the whole label',
+                              title: 'Capture the packaging (optional)',
                               body:
-                                  'Fit the entire front panel inside the frame so we can check packaging colors, logos, and seals.',
+                                  'Take a clear photo of the label if your product is in our trained references so the app can compare colors, logos, and seals.',
                             ),
                             const SizedBox(height: 12),
                             const _GuideStep(
                               number: '2',
                               title: 'Zoom into the registration number',
                               body:
-                                  'Move closer or pinch-to-zoom on the printed FDA registration code so OCR can read it clearly.',
+                                  'Move closer or pinch-to-zoom on the printed FDA registration code so OCR can read it clearly. Retry if the capture looks blurry.',
                             ),
                             const SizedBox(height: 12),
                             const _GuideStep(
                               number: '3',
-                              title: 'Confirm to match FDA records',
+                              title: 'Confirm the scan',
                               body:
-                                  'We combine both captures—text for registration, image for packaging—to verify authenticity.',
+                                  'After both steps are captured or skipped, tap Confirm. We match the text against FDA records and use the packaging helper if available.',
                             ),
                             const SizedBox(height: 18),
                             SizedBox(
@@ -1555,111 +1206,132 @@ class _ScannerScreenState extends State<ScannerScreen> {
       ),
     );
   }
-}
 
-class _CaptureStepper extends StatelessWidget {
-  final bool wideDone;
-  final bool regDone;
-  final VoidCallback onHelp;
-
-  const _CaptureStepper({
-    required this.wideDone,
-    required this.regDone,
-    required this.onHelp,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: _CaptureStepTile(
-                step: 'Step 1',
-                title: 'Packaging',
-                description: 'Fit the whole label inside the frame.',
-                done: wideDone,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _CaptureStepTile(
-                step: 'Step 2',
-                title: 'Reg number',
-                description: 'Zoom closer to the printed registration code.',
-                done: regDone,
-              ),
-            ),
-          ],
-        ),
-        TextButton.icon(
-          onPressed: onHelp,
-          icon: const Icon(Icons.help_outline_rounded, size: 18),
-          label: const Text('Need a refresher?'),
-        ),
-      ],
-    );
-  }
-}
-
-class _CaptureStepTile extends StatelessWidget {
-  final String step;
-  final String title;
-  final String description;
-  final bool done;
-
-  const _CaptureStepTile({
-    required this.step,
-    required this.title,
-    required this.description,
-    required this.done,
-  });
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildCaptureControlsOverlay(BuildContext context) {
     final theme = Theme.of(context);
-    final color =
-        done ? theme.colorScheme.primary : theme.colorScheme.outline;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
-        color: color.withValues(alpha: done ? 0.16 : 0.05),
-      ),
+    final bool isPackaging = _activeCaptureStep == _CaptureStep.packaging;
+    final bool captured = isPackaging ? _wideShotCaptured : _regShotCaptured;
+    final bool skipped =
+        isPackaging ? _packageCaptureSkipped : _regCaptureSkipped;
+    final bool disabled = _isCapturing || _isMatching;
+    final bool isConfirmStage = _canConfirmFlow;
+    final bool confirmEnabled = isConfirmStage && !disabled;
+    final Color textColor = Colors.white;
+    final Color muted = Colors.white70;
+
+    final IconData captureIcon =
+        isPackaging ? Icons.camera_alt_rounded : Icons.document_scanner_rounded;
+    final IconData mainIcon = isConfirmStage
+        ? Icons.check_rounded
+        : (captured ? Icons.refresh_rounded : captureIcon);
+    final String mainLabel = isConfirmStage
+        ? (_isMatching ? 'Matching…' : 'Confirm scan')
+        : (captured
+            ? (isPackaging ? 'Retake packaging' : 'Retake reg number')
+            : (isPackaging ? 'Capture packaging' : 'Capture reg number'));
+    final VoidCallback? mainAction = isConfirmStage
+        ? (confirmEnabled ? _confirmScan : null)
+        : (disabled
+            ? null
+            : (isPackaging ? _startPackagingCapture : _startRegCapture));
+
+    final IconData skipIcon =
+        skipped ? Icons.undo_rounded : Icons.visibility_off_rounded;
+    final String skipLabel = skipped
+        ? (isPackaging ? 'Use packaging capture' : 'Add reg capture')
+        : (isPackaging ? 'Skip packaging' : 'Skip reg capture');
+    final VoidCallback? skipAction = disabled
+        ? null
+        : (isPackaging
+            ? (skipped ? _resumePackagingCapture : _skipPackagingCapture)
+            : (skipped ? _resumeRegCapture : _skipRegCapture));
+
+    final VoidCallback? stepToggle = disabled
+        ? null
+        : () => setState(() {
+              _activeCaptureStep = isPackaging
+                  ? _CaptureStep.regNumber
+                  : _CaptureStep.packaging;
+            });
+
+    final String stepTitle = isConfirmStage
+        ? 'Step 3 - Confirm'
+        : (isPackaging ? 'Step 1 - Packaging' : 'Step 2 - Registration');
+    final String statusText = isConfirmStage
+        ? (_isMatching ? 'Matching in progress' : 'Ready to submit')
+        : (skipped
+            ? 'Skipped (uses OCR text)'
+            : (captured ? 'Capture saved' : 'Ready to capture'));
+
+    return SafeArea(
+      minimum: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 12,
-                backgroundColor: color,
-                child: Text(
-                  done ? '✓' : step.split(' ').last,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  stepTitle,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: textColor,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                title,
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
+                const SizedBox(height: 2),
+                Text(
+                  statusText,
+                  style: theme.textTheme.labelSmall?.copyWith(color: muted),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            description,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: 72,
+                  height: 72,
+                  child: RawMaterialButton(
+                    onPressed: disabled ? null : mainAction,
+                    fillColor: Colors.white.withValues(alpha: 0.95),
+                    shape: const CircleBorder(),
+                    elevation: 4,
+                    child: Icon(
+                      mainIcon,
+                      size: 28,
+                      color:
+                          isConfirmStage ? Colors.green : theme.primaryColor,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  mainLabel,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: textColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _OverlayActionChip(
+                      icon: skipIcon,
+                      label: skipLabel,
+                      onPressed: skipAction,
+                    ),
+                    _OverlayActionChip(
+                      icon: Icons.swap_horiz_rounded,
+                      label: isPackaging ? 'Go to Step 2' : 'Back to Step 1',
+                      onPressed: stepToggle,
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ],
@@ -1667,6 +1339,7 @@ class _CaptureStepTile extends StatelessWidget {
     );
   }
 }
+
 
 class _GuideStep extends StatelessWidget {
   final String number;
@@ -1720,6 +1393,35 @@ class _GuideStep extends StatelessWidget {
   }
 }
 
+class _OverlayActionChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+
+  const _OverlayActionChip({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bool enabled = onPressed != null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: TextButton.icon(
+        onPressed: onPressed,
+        style: TextButton.styleFrom(
+          foregroundColor: enabled ? Colors.white : Colors.white60,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+        ),
+        icon: Icon(icon, size: 18),
+        label: Text(label),
+      ),
+    );
+  }
+}
+
 Widget _roundIconButton({
   required IconData icon,
   required VoidCallback onTap,
@@ -1756,7 +1458,7 @@ class _MatchingDialog extends StatelessWidget {
             ),
             const SizedBox(width: 14),
             Text(
-              'Matching product…',
+              'Matching product?',
               style: theme.textTheme.bodyMedium?.copyWith(
                 fontWeight: FontWeight.w600,
               ),
@@ -1767,6 +1469,18 @@ class _MatchingDialog extends StatelessWidget {
     );
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -27,8 +27,8 @@ android {
         applicationId = "com.example.basta_fda"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // Firebase Auth 23.x requires minSdk 23 or higher
-        minSdk = 23
+        // Firebase Auth and tflite_flutter both require minSdk 26 on Dart 3.8 toolchain
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

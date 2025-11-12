@@ -26,6 +26,7 @@ class ScanResultScreen extends StatefulWidget {
   final ImageCheckResult initialImageResult;
   final Future<ImageCheckResult>? imageResultFuture;
   final String? confirmedRegNumber;
+  final bool isImageTrainedProduct;
 
   const ScanResultScreen({
     super.key,
@@ -35,6 +36,7 @@ class ScanResultScreen extends StatefulWidget {
     required this.initialImageResult,
     this.imageResultFuture,
     this.confirmedRegNumber,
+    this.isImageTrainedProduct = false,
   });
 
   @override
@@ -43,15 +45,87 @@ class ScanResultScreen extends StatefulWidget {
 
 class _ScanResultScreenState extends State<ScanResultScreen> {
   late ImageCheckResult _imageResult;
+  bool _alertShown = false;
 
   @override
   void initState() {
     super.initState();
     _imageResult = widget.initialImageResult;
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _maybeShowSuspiciousAlert());
     widget.imageResultFuture?.then((result) {
       if (!mounted || result == _imageResult) return;
       setState(() => _imageResult = result);
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _maybeShowSuspiciousAlert());
     });
+  }
+
+  Map<String, double> _imageConfidenceBreakdown() {
+    if (!widget.isImageTrainedProduct) return const {};
+    final info = _imageResult.info;
+    if (info == null || info.isEmpty) return const {};
+    double parseScore(String key) {
+      final raw = info[key];
+      if (raw == null) return 0;
+      final value = double.tryParse(raw);
+      if (value == null || value.isNaN) return 0;
+      return value;
+    }
+
+    double authentic = parseScore('authenticScore');
+    double suspicious = parseScore('suspiciousScore');
+    if (authentic <= 0 && suspicious <= 0) return const {};
+    final total = (authentic + suspicious);
+    if (total > 0) {
+      authentic /= total;
+      suspicious /= total;
+    }
+    double clamp(double v) => v.clamp(0.0, 1.0).toDouble();
+    return {
+      'authentic': clamp(authentic),
+      'suspicious': clamp(suspicious),
+    };
+  }
+
+  void _maybeShowSuspiciousAlert() {
+    if (!mounted ||
+        _alertShown ||
+        !widget.isImageTrainedProduct ||
+        _imageResult.info == null) {
+      return;
+    }
+    final breakdown = _imageConfidenceBreakdown();
+    if (breakdown.isEmpty) return;
+    final suspicious = breakdown['suspicious'] ?? 0;
+    final authentic = breakdown['authentic'] ?? 0;
+    if (suspicious <= authentic) return;
+    _alertShown = true;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.warning_amber_rounded,
+                  color: theme.colorScheme.error),
+              const SizedBox(width: 8),
+              const Text('Packaging alert'),
+            ],
+          ),
+          content: const Text(
+            'The packaging helper model spotted more suspicious cues than authentic ones. Compare this pack to official photos and report it if anything looks tampered.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Inspect packaging'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _showRedFlagsChecklist(BuildContext context) {
@@ -334,6 +408,47 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                 ],
               ),
             ),
+
+            ...() {
+              final breakdown = _imageConfidenceBreakdown();
+              Widget? section;
+              if (widget.isImageTrainedProduct) {
+                if (breakdown.isNotEmpty) {
+                  section = _ImageConfidenceCard(
+                    authenticScore: breakdown['authentic'] ?? 0,
+                    suspiciousScore: breakdown['suspicious'] ?? 0,
+                    productName: titleCase(productInfo['brand_name']),
+                  );
+                } else if (_imageResult.status == ImageCheckStatus.pending) {
+                  section = const _InfoBanner(
+                    icon: Icons.hourglass_top_rounded,
+                    title: 'Packaging check in progress',
+                    message:
+                        'We are comparing your photo to our reference images. Results will appear shortly.',
+                  );
+                } else if (_imageResult.status == ImageCheckStatus.skipped ||
+                    _imageResult.status == ImageCheckStatus.failed) {
+                  section = const _InfoBanner(
+                    icon: Icons.image_not_supported_rounded,
+                    title: 'Packaging check unavailable',
+                    message:
+                        'This scan did not include a usable packaging photo. Verification relies on the registration number.',
+                  );
+                }
+              } else {
+                section = const _InfoBanner(
+                  icon: Icons.inventory_2_outlined,
+                  title: 'Packaging reference not available',
+                  message:
+                      'We matched the registration record, but this SKU is not yet part of our packaging training set.',
+                );
+              }
+              if (section == null) return <Widget>[];
+              return [
+                const SizedBox(height: 12),
+                section,
+              ];
+            }(),
 
             if (_imageResult.status.needsWarning) ...[
               const SizedBox(height: 8),
@@ -737,6 +852,151 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
             const SizedBox(height: 16),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ImageConfidenceCard extends StatelessWidget {
+  final double authenticScore;
+  final double suspiciousScore;
+  final String productName;
+
+  const _ImageConfidenceCard({
+    required this.authenticScore,
+    required this.suspiciousScore,
+    required this.productName,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.verified_rounded, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '$productName packaging confidence',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _ConfidenceBar(
+              label: 'Authentic cues',
+              value: authenticScore,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(height: 12),
+            _ConfidenceBar(
+              label: 'Suspicious cues',
+              value: suspiciousScore,
+              color: theme.colorScheme.error,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'These percentages come from the packaging helper model. Combine them with the registration result before making a decision.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ConfidenceBar extends StatelessWidget {
+  final String label;
+  final double value;
+  final Color color;
+
+  const _ConfidenceBar({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final clampedValue = value.clamp(0.0, 1.0).toDouble();
+    final percent = (clampedValue * 100).toStringAsFixed(1);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              label,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            Text(
+              '$percent%',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: LinearProgressIndicator(
+            minHeight: 8,
+            value: clampedValue,
+            backgroundColor: color.withValues(alpha: 0.15),
+            valueColor: AlwaysStoppedAnimation<Color>(color),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _InfoBanner extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String message;
+
+  const _InfoBanner({
+    required this.icon,
+    required this.title,
+    required this.message,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      color:
+          theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+      child: ListTile(
+        leading: Icon(icon, color: theme.colorScheme.primary),
+        title: Text(
+          title,
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        subtitle: Text(message),
       ),
     );
   }
@@ -1429,10 +1689,7 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
                         );
                       final conf = widget.imageInfo?['confidence'];
                       if (conf != null && conf.isNotEmpty) {
-                        summary
-                          ..writeln(
-                            'Image Confidence: $conf',
-                          );
+                        summary.writeln('Image Confidence: $conf');
                       }
 
                       await Share.share(

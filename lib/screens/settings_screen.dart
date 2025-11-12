@@ -150,18 +150,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ),
-                const SizedBox(height: 6),
-                SwitchListTile(
-                  title: const Text('Enable live OCR by default'),
-                  subtitle: const Text(
-                    'Show live suggestions while aiming the camera',
-                  ),
-                  value: s.liveOcrDefault,
-                  onChanged: (v) => setState(() {
-                    s.liveOcrDefault = v;
-                    s.save();
-                  }),
-                ),
                 SwitchListTile(
                   title: const Text('Review before search'),
                   subtitle: const Text('Show the review sheet before matching'),
@@ -172,24 +160,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   }),
                 ),
                 SwitchListTile(
-                  title: const Text('Wi‑Fi only for data updates'),
+                  title: const Text('Wi-Fi only for data updates'),
                   subtitle: const Text(
-                    'Use Wi‑Fi for downloading the latest FDA CSV',
+                    'Use Wi-Fi when downloading the latest FDA CSV',
                   ),
                   value: s.wifiOnlyUpdates,
                   onChanged: (v) => setState(() {
                     s.wifiOnlyUpdates = v;
-                    s.save();
-                  }),
-                ),
-                SwitchListTile(
-                  title: const Text("Smart 'Add side' prompt"),
-                  subtitle: const Text(
-                    'Suggest adding another package side when OCR looks incomplete',
-                  ),
-                  value: s.smartAddSidePrompt,
-                  onChanged: (v) => setState(() {
-                    s.smartAddSidePrompt = v;
                     s.save();
                   }),
                 ),
@@ -201,17 +178,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: s.strictMatching,
                   onChanged: (v) => setState(() {
                     s.strictMatching = v;
-                    s.save();
-                  }),
-                ),
-                SwitchListTile(
-                  title: const Text('Update FDA data on Wi‑Fi only'),
-                  subtitle: const Text(
-                    'Skip online refresh when not connected to Wi‑Fi',
-                  ),
-                  value: s.wifiOnlyUpdates,
-                  onChanged: (v) => setState(() {
-                    s.wifiOnlyUpdates = v;
                     s.save();
                   }),
                 ),
@@ -650,3 +616,4 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 }
+
