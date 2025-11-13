@@ -61,6 +61,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
   _CaptureStep _activeCaptureStep = _CaptureStep.packaging;
   bool _packageCaptureSkipped = false;
   bool _regCaptureSkipped = false;
+  bool _regSelectionPending = false;
+  String? _pendingRegText;
+  String? _pendingRegRaw;
 
   bool get _hasCompletedPackaging =>
       _packageCaptureSkipped || _wideShotCaptured;
@@ -178,6 +181,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _pendingRegCapture = false;
       _activeCaptureStep = _CaptureStep.packaging;
       _lastCapturedImagePath = null;
+      _regSelectionPending = false;
+      _pendingRegText = null;
+      _pendingRegRaw = null;
+      _confirmedRegNumber = null;
       if (clearText) {
         _extractedText = '';
         _lastRawText = null;
@@ -403,7 +410,21 @@ class _ScannerScreenState extends State<ScannerScreen> {
           content: Text('Reg capture looked unclear. Try again.'),
         ),
       );
+      _pendingRegCapture = true;
+      return;
     }
+    _pendingRegText = result;
+    _pendingRegRaw = _lastRawText ?? result;
+    final accepted = await _promptRegSelection(
+      initial: result,
+      rawText: _pendingRegRaw ?? result,
+    );
+    if (!mounted) return;
+    if (!accepted) {
+      _pendingRegCapture = true;
+      return;
+    }
+    _pendingRegCapture = false;
   }
 
   void _skipPackagingCapture() {
@@ -439,8 +460,42 @@ class _ScannerScreenState extends State<ScannerScreen> {
     });
   }
 
+  Future<bool> _promptRegSelection({
+    required String initial,
+    required String rawText,
+    bool allowRetake = true,
+  }) async {
+    _regSelectionPending = true;
+    final selection = await _showRegSelectionSheet(
+      initialText: initial,
+      rawText: rawText,
+      allowRetake: allowRetake,
+    );
+    if (!mounted) return false;
+    if (selection == null) {
+      _regSelectionPending = false;
+      return false;
+    }
+    setState(() {
+      _confirmedRegNumber = selection;
+      _regShotCaptured = true;
+      _regCaptureSkipped = false;
+      _regSelectionPending = false;
+    });
+    return true;
+  }
+
   Future<void> _confirmScan() async {
     if (!_canConfirmFlow || _isCapturing || _isMatching) return;
+    if (!_regCaptureSkipped &&
+        (_confirmedRegNumber == null || _pendingRegCapture)) {
+      final selected = await _promptRegSelection(
+        initial: _pendingRegText ?? _extractedText ?? '',
+        rawText: _pendingRegRaw ?? _lastRawText ?? _extractedText ?? '',
+        allowRetake: true,
+      );
+      if (!selected) return;
+    }
     await _matchScannedText();
   }
 
@@ -477,107 +532,29 @@ class _ScannerScreenState extends State<ScannerScreen> {
       return;
     }
 
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        final bool imageAllowed = allowImageCheck;
-        // Detect Reg. No. candidates from raw or current text
-        final rawForReg = rawOverride ?? _lastRawText ?? working;
-        final regCandidates = widget.fdaChecker.regCandidates(rawForReg);
-        final padding = EdgeInsets.only(
-          bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
-          left: 16,
-          right: 16,
-          top: 16,
-        );
-        return SafeArea(
-          child: Container(
-            width: double.infinity,
-            padding: padding,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Choose Registration Number',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  if (regCandidates.isNotEmpty) ...[
-                    Text(
-                      'Detected numbers',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).hintColor,
-                          ),
-                    ),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: -6,
-                      children: regCandidates.take(3).map((code) {
-                        return ActionChip(
-                          label: Text(code),
-                          onPressed: () {
-                            Navigator.of(ctx).pop();
-                            _executeSearch(
-                              code,
-                              rawOverride: code,
-                              skipImageCheck: !imageAllowed,
-                            );
-                          },
-                        );
-                      }).toList(),
-                    ),
-                    const SizedBox(height: 8),
-                  ] else ...[
-                    const Text(
-                      'No clear registration number detected.\nCapture another angle for clearer text.',
-                    ),
-                  ],
-                  Row(
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.of(ctx).pop(),
-                        child: const Text('Cancel'),
-                      ),
-                      const Spacer(),
-                      ElevatedButton.icon(
-                        onPressed: () {
-                          Navigator.of(ctx).pop();
-                          final manual = (regCandidates.isNotEmpty
-                                  ? regCandidates.first
-                                  : working)
-                              .trim();
-                          _executeSearch(
-                            manual,
-                            rawOverride: manual,
-                            skipImageCheck: !imageAllowed,
-                          );
-                        },
-                        icon: const Icon(Icons.search_rounded),
-                        label: Text(
-                          regCandidates.isNotEmpty
-                              ? 'Use top match'
-                              : 'Use extracted text',
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
+    if (_confirmedRegNumber != null &&
+        !_pendingRegCapture &&
+        !_regSelectionPending) {
+      await _executeSearch(
+        _confirmedRegNumber!,
+        rawOverride: _confirmedRegNumber!,
+        skipImageCheck: !allowImageCheck || _packageCaptureSkipped,
+      );
+      return;
+    }
+
+    final rawForReg = rawOverride ?? _lastRawText ?? working;
+    final selected = await _promptRegSelection(
+      initial: working,
+      rawText: rawForReg,
+      allowRetake: true,
+    );
+    if (!mounted) return;
+    if (!selected || _confirmedRegNumber == null) return;
+    await _executeSearch(
+      _confirmedRegNumber!,
+      rawOverride: _confirmedRegNumber!,
+      skipImageCheck: !allowImageCheck || _packageCaptureSkipped,
     );
   }
 
@@ -875,6 +852,145 @@ class _ScannerScreenState extends State<ScannerScreen> {
         .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
+  }
+
+  String? _extractRegNumber(String input) {
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) return null;
+    final regPattern = RegExp(r'([A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?)');
+    final verbosePattern = RegExp(
+      r'reg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?)',
+      caseSensitive: false,
+    );
+    final direct = regPattern.firstMatch(trimmed);
+    if (direct != null) return direct.group(1)?.toUpperCase();
+    final verbose = verbosePattern.firstMatch(trimmed);
+    if (verbose != null) return verbose.group(1)?.toUpperCase();
+    return null;
+  }
+
+  Future<String?> _showRegSelectionSheet({
+    required String initialText,
+    required String rawText,
+    bool allowRetake = true,
+  }) async {
+    final controller = TextEditingController(text: initialText.trim());
+    String? error;
+    final candidates = widget.fdaChecker.regCandidates(rawText);
+    return showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: allowRetake,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final bottom = MediaQuery.of(ctx).viewInsets.bottom;
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(20, 20, 20, bottom + 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.confirmation_number_rounded,
+                            color: theme.colorScheme.primary),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Choose registration number',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        if (allowRetake)
+                          IconButton(
+                            onPressed: () => Navigator.of(ctx).pop(null),
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    if (candidates.isNotEmpty) ...[
+                      Text(
+                        'Suggestions from scan',
+                        style: theme.textTheme.labelLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: candidates.take(4).map((code) {
+                          return ActionChip(
+                            label: Text(code),
+                            onPressed: () {
+                              setSheetState(() {
+                                controller.text = code;
+                                error = null;
+                              });
+                            },
+                          );
+                        }).toList(),
+                      ),
+                      const SizedBox(height: 12),
+                    ] else ...[
+                      Text(
+                        'We could not detect a clear reg. number. Enter it manually or retake.',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    TextField(
+                      controller: controller,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: InputDecoration(
+                        labelText: 'Reg. number',
+                        hintText: 'ABC-123456',
+                        errorText: error,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        TextButton.icon(
+                          onPressed: allowRetake
+                              ? () => Navigator.of(ctx).pop(null)
+                              : null,
+                          icon: const Icon(Icons.cameraswitch_rounded),
+                          label: const Text('Retake reg capture'),
+                        ),
+                        const Spacer(),
+                        FilledButton(
+                          onPressed: () {
+                            final normalized =
+                                _extractRegNumber(controller.text);
+                            if (normalized == null) {
+                              setSheetState(() {
+                                error =
+                                    'Enter a valid reg. number like ABC-123456.';
+                              });
+                              return;
+                            }
+                            Navigator.of(ctx).pop(normalized);
+                          },
+                          child: const Text('Use this number'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
