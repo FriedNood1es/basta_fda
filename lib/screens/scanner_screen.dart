@@ -46,6 +46,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   bool _regShotCaptured = false;
   bool _pendingRegCapture = false;
   bool _showCaptureGuide = false;
+  bool _packagingSummaryVisible = false;
   // Tap-to-focus + pinch-to-zoom
   Offset? _lastFocusTap;
   DateTime? _lastFocusAt;
@@ -410,6 +411,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _packageCaptureSkipped = true;
       _wideShotCaptured = false;
       _activeCaptureStep = _CaptureStep.regNumber;
+      _pendingRegCapture = !_regShotCaptured;
     });
   }
 
@@ -417,6 +419,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     setState(() {
       _packageCaptureSkipped = false;
       _activeCaptureStep = _CaptureStep.packaging;
+      _pendingRegCapture = false;
     });
   }
 
@@ -425,6 +428,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _regCaptureSkipped = true;
       _regShotCaptured = false;
       _activeCaptureStep = _CaptureStep.regNumber;
+      _pendingRegCapture = false;
     });
   }
 
@@ -1198,7 +1202,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
     final IconData captureIcon =
         isPackaging ? Icons.camera_alt_rounded : Icons.document_scanner_rounded;
-    final bool confirmMode = isConfirmStage;
+    final bool confirmMode = isConfirmStage &&
+        _activeCaptureStep == _CaptureStep.regNumber &&
+        (_regShotCaptured || _regCaptureSkipped) &&
+        !_pendingRegCapture;
     final IconData mainIcon = confirmMode
         ? Icons.check_rounded
         : (captured ? Icons.refresh_rounded : captureIcon);
@@ -1278,7 +1285,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   statusText,
                   style: theme.textTheme.labelSmall?.copyWith(color: muted),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
+                _CaptureSummaryRow(
+                  packagingDone: _wideShotCaptured || _packageCaptureSkipped,
+                  regDone: _regShotCaptured || _regCaptureSkipped,
+                ),
+                const SizedBox(height: 8),
                 SizedBox(
                   width: 72,
                   height: 72,
@@ -1458,17 +1470,83 @@ class _MatchingDialog extends StatelessWidget {
   }
 }
 
+class _CaptureSummaryRow extends StatelessWidget {
+  final bool packagingDone;
+  final bool regDone;
 
+  const _CaptureSummaryRow({
+    required this.packagingDone,
+    required this.regDone,
+  });
 
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        _CaptureSummaryPill(
+          label: 'Packaging',
+          icon: Icons.inventory_2_rounded,
+          done: packagingDone,
+          theme: theme,
+        ),
+        const SizedBox(width: 8),
+        _CaptureSummaryPill(
+          label: 'Reg number',
+          icon: Icons.confirmation_number_rounded,
+          done: regDone,
+          theme: theme,
+        ),
+      ],
+    );
+  }
+}
 
+class _CaptureSummaryPill extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool done;
+  final ThemeData theme;
 
+  const _CaptureSummaryPill({
+    required this.label,
+    required this.icon,
+    required this.done,
+    required this.theme,
+  });
 
-
-
-
-
-
-
+  @override
+  Widget build(BuildContext context) {
+    final Color color = done ? Colors.greenAccent : Colors.white70;
+    final Color fill = done
+        ? Colors.greenAccent.withAlpha(40)
+        : Colors.white.withAlpha(20);
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: fill,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withAlpha(120)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 16, color: color),
+            const SizedBox(width: 6),
+            Text(
+              done ? '$label ✓' : '$label …',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: color,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 
 
