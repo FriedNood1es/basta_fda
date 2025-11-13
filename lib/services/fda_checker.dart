@@ -235,13 +235,13 @@ class FDAChecker {
     final text = raw; // preserve separators for regex
     // 1) Explicit code pattern seen in dataset: e.g., DRP-4935 or DRP-4961-03
     //    Pattern: (3–4 letters)-(3–6 digits)[-(2–4 digits)]
-    final explicitCode = RegExp(r'\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b');
+    final explicitCode = RegExp(r'\b[A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?\b');
     for (final m in explicitCode.allMatches(text)) {
       out.add(m.group(0)!.trim());
     }
     // 2) Labeled formats: "Reg. No.: DRP-4935" strictly capturing explicit code format only
     final reLabeledStrict = RegExp(
-      r'\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?)\b',
+      r'\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?)\b',
       caseSensitive: false,
     );
     for (final m in reLabeledStrict.allMatches(text)) {
@@ -308,20 +308,20 @@ class FDAChecker {
     final List<String> out = [];
     final text = raw;
     final explicit = RegExp(
-      r'\b[A-Za-z]{3,4}[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?\b',
+      r'\b[A-Za-z]{2,4}[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?\b',
     );
     for (final m in explicit.allMatches(text)) {
       out.add(m.group(0)!.trim());
     }
     final labeled = RegExp(
-      r'\b(?:fda\s*)?reg(?:istration)?\.?\s*(?:no\.?|number)?\s*[:#-]?\s*([A-Za-z]{3,4}[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?)\b',
+      r'\b(?:fda\s*)?reg(?:istration)?\.?\s*(?:no\.?|number)?\s*[:#-]?\s*([A-Za-z]{2,4}[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?)\b',
       caseSensitive: false,
     );
     for (final m in labeled.allMatches(text)) {
       final g = m.group(1);
       if (g != null) out.add(g.trim());
     }
-    final compact = RegExp(r'\b[A-Za-z]{3,4}\d{3,6}(?:\d{2,4})?\b');
+    final compact = RegExp(r'\b[A-Za-z]{2,4}\d{3,6}(?:\d{2,4})?\b');
     for (final m in compact.allMatches(text)) {
       out.add(m.group(0)!.trim());
     }

@@ -410,6 +410,44 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     final imageConfidence = imageInfo?['confidence'] ?? '';
     final imageSource = imageInfo?['source'] ?? '';
 
+    final Widget? packagingSection = () {
+      final breakdown = _imageConfidenceBreakdown();
+      if (widget.isImageTrainedProduct) {
+        if (breakdown.isNotEmpty) {
+          return _ImageConfidenceCard(
+            authenticScore: breakdown['authentic'] ?? 0,
+            suspiciousScore: breakdown['suspicious'] ?? 0,
+            productName: titleCase(productInfo['brand_name']),
+          );
+        }
+        if (_imageResult.status == ImageCheckStatus.pending) {
+          return const _InfoBanner(
+            icon: Icons.hourglass_top_rounded,
+            title: 'Packaging check in progress',
+            message:
+                'We are comparing your photo to our reference images. Results will appear shortly.',
+          );
+        }
+        if (_imageResult.status == ImageCheckStatus.skipped ||
+            _imageResult.status == ImageCheckStatus.failed) {
+          return const _InfoBanner(
+            icon: Icons.image_not_supported_rounded,
+            title: 'Packaging check unavailable',
+            message:
+                'This scan did not include a usable packaging photo. Verification relies on the registration number.',
+          );
+        }
+      } else {
+        return const _InfoBanner(
+          icon: Icons.inventory_2_outlined,
+          title: 'Packaging reference not available',
+          message:
+              'We matched the registration record, but this SKU is not yet part of our packaging training set.',
+        );
+      }
+      return null;
+    }();
+
     return Scaffold(
       appBar: AppBar(title: const Text('Scan Result')),
 
@@ -420,7 +458,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
 
           children: [
-            // Header card
+            const _SectionHeader(label: 'Match summary'),
+            const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.all(16),
 
@@ -494,46 +533,12 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
               ),
             ),
 
-            ...() {
-              final breakdown = _imageConfidenceBreakdown();
-              Widget? section;
-              if (widget.isImageTrainedProduct) {
-                if (breakdown.isNotEmpty) {
-                  section = _ImageConfidenceCard(
-                    authenticScore: breakdown['authentic'] ?? 0,
-                    suspiciousScore: breakdown['suspicious'] ?? 0,
-                    productName: titleCase(productInfo['brand_name']),
-                  );
-                } else if (_imageResult.status == ImageCheckStatus.pending) {
-                  section = const _InfoBanner(
-                    icon: Icons.hourglass_top_rounded,
-                    title: 'Packaging check in progress',
-                    message:
-                        'We are comparing your photo to our reference images. Results will appear shortly.',
-                  );
-                } else if (_imageResult.status == ImageCheckStatus.skipped ||
-                    _imageResult.status == ImageCheckStatus.failed) {
-                  section = const _InfoBanner(
-                    icon: Icons.image_not_supported_rounded,
-                    title: 'Packaging check unavailable',
-                    message:
-                        'This scan did not include a usable packaging photo. Verification relies on the registration number.',
-                  );
-                }
-              } else {
-                section = const _InfoBanner(
-                  icon: Icons.inventory_2_outlined,
-                  title: 'Packaging reference not available',
-                  message:
-                      'We matched the registration record, but this SKU is not yet part of our packaging training set.',
-                );
-              }
-              if (section == null) return <Widget>[];
-              return [
-                const SizedBox(height: 12),
-                section,
-              ];
-            }(),
+            if (packagingSection != null) ...[
+              const SizedBox(height: 20),
+              const _SectionHeader(label: 'Packaging confidence'),
+              const SizedBox(height: 8),
+              packagingSection,
+            ],
 
             if (_imageResult.status.needsWarning) ...[
               const SizedBox(height: 8),
@@ -567,6 +572,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
             const SizedBox(height: 16),
 
+            const _SectionHeader(label: 'Quick actions'),
+            const SizedBox(height: 8),
             // Actions
             Row(
               children: [
@@ -610,6 +617,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
             const SizedBox(height: 16),
 
+            const _SectionHeader(label: 'Product details'),
+            const SizedBox(height: 8),
             // Details card
             Card(
               elevation: 0,
@@ -691,6 +700,9 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                 imageCategory.isNotEmpty ||
                 imageConfidence.isNotEmpty ||
                 imageSource.isNotEmpty) ...[
+              const SizedBox(height: 20),
+              const _SectionHeader(label: 'Packaging helper details'),
+              const SizedBox(height: 8),
               Card(
                 elevation: 0,
                 shape: RoundedRectangleBorder(
@@ -722,6 +734,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
             // Why it matched (if available)
             if ((productInfo['match_reason'] ?? '').isNotEmpty) ...[
+              const _SectionHeader(label: 'Why it matched'),
+              const SizedBox(height: 8),
               Card(
                 elevation: 0,
 
@@ -776,6 +790,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
             // Why this status (e.g., EXPIRED or UNRECOGNIZED)
             if ((productInfo['verification_reasons'] ?? '').isNotEmpty) ...[
+              const _SectionHeader(label: 'Why this status'),
+              const SizedBox(height: 8),
               Card(
                 elevation: 0,
 
@@ -821,6 +837,9 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
               const SizedBox(height: 20),
             ],
 
+            const SizedBox(height: 20),
+            const _SectionHeader(label: 'Visual checks'),
+            const SizedBox(height: 8),
             // Visual safety checks
             Card(
               margin: const EdgeInsets.only(top: 20),
@@ -883,6 +902,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
             const SizedBox(height: 24),
 
+            const _SectionHeader(label: 'Take action'),
+            const SizedBox(height: 8),
             // Report button
             SizedBox(
               width: double.infinity,
@@ -1082,6 +1103,25 @@ class _InfoBanner extends StatelessWidget {
           ),
         ),
         subtitle: Text(message),
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String label;
+
+  const _SectionHeader({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Text(
+      label.toUpperCase(),
+      style: theme.textTheme.labelMedium?.copyWith(
+        letterSpacing: 0.8,
+        fontWeight: FontWeight.w700,
+        color: theme.colorScheme.primary,
       ),
     );
   }

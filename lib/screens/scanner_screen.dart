@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show HapticFeedback;
+import 'dart:io';
+import 'package:flutter/services.dart'
+    show Clipboard, ClipboardData, HapticFeedback;
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:basta_fda/models/scan_verdict.dart';
@@ -57,6 +59,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
   final PackagingImageClassifier _imageClassifier =
       PackagingImageClassifier.instance;
   String? _lastCapturedImagePath;
+  String? _packagingImagePath;
+  String? _regImagePath;
   String? _confirmedRegNumber;
   _CaptureStep _activeCaptureStep = _CaptureStep.packaging;
   bool _packageCaptureSkipped = false;
@@ -181,6 +185,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _pendingRegCapture = false;
       _activeCaptureStep = _CaptureStep.packaging;
       _lastCapturedImagePath = null;
+      _packagingImagePath = null;
+      _regImagePath = null;
       _regSelectionPending = false;
       _pendingRegText = null;
       _pendingRegRaw = null;
@@ -352,8 +358,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
           _regShotCaptured = true;
           _pendingRegCapture = false;
           _activeCaptureStep = _CaptureStep.regNumber;
+          _regImagePath = file.path;
         } else {
           _wideShotCaptured = true;
+          _packagingImagePath = file.path;
           if (!_regShotCaptured && !_regCaptureSkipped) {
             _activeCaptureStep = _CaptureStep.regNumber;
           }
@@ -621,9 +629,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
       final byReg = widget.fdaChecker.findByRegNo(raw);
       final regLike =
-          RegExp(r'\b[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b').hasMatch(raw) ||
+          RegExp(r'\b[A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?\b').hasMatch(raw) ||
               RegExp(
-                r'\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*[A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?\b',
+                r'\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*[A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?\b',
                 caseSensitive: false,
               ).hasMatch(raw);
 
@@ -857,9 +865,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
   String? _extractRegNumber(String input) {
     final trimmed = input.trim();
     if (trimmed.isEmpty) return null;
-    final regPattern = RegExp(r'([A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?)');
+    final regPattern = RegExp(r'([A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?)');
     final verbosePattern = RegExp(
-      r'reg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{3,4}-\d{3,6}(?:-\d{2,4})?)',
+      r'reg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?)',
       caseSensitive: false,
     );
     final direct = regPattern.firstMatch(trimmed);
@@ -973,7 +981,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                             if (normalized == null) {
                               setSheetState(() {
                                 error =
-                                    'Enter a valid reg. number like ABC-123456.';
+                                    'Enter a valid reg. number like DR-153 or ABC-123456.';
                               });
                               return;
                             }
@@ -1406,7 +1414,49 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   packagingDone: _wideShotCaptured || _packageCaptureSkipped,
                   regDone: _regShotCaptured || _regCaptureSkipped,
                 ),
-                const SizedBox(height: 8),
+                if ((_regShotCaptured || _regCaptureSkipped) &&
+                    (_confirmedRegNumber?.isNotEmpty ?? false)) ...[
+                  const SizedBox(height: 6),
+                  _RegNumberChip(
+                    regNumber: _confirmedRegNumber!,
+                    onCopy: () async {
+                      await Clipboard.setData(
+                        ClipboardData(text: _confirmedRegNumber!),
+                      );
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Registration number copied'),
+                          duration: Duration(seconds: 1),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+                if ((_packagingImagePath != null &&
+                        (_wideShotCaptured || _packageCaptureSkipped)) ||
+                    (_regImagePath != null &&
+                        (_regShotCaptured || _regCaptureSkipped))) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (_packagingImagePath != null)
+                        _CapturePreviewButton(
+                          label: 'Packaging preview',
+                          icon: Icons.inventory_2_rounded,
+                          path: _packagingImagePath!,
+                        ),
+                      if (_regImagePath != null)
+                        _CapturePreviewButton(
+                          label: 'Reg preview',
+                          icon: Icons.confirmation_number_rounded,
+                          path: _regImagePath!,
+                        ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 6),
                 SizedBox(
                   width: 72,
                   height: 72,
@@ -1581,6 +1631,94 @@ class _MatchingDialog extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _RegNumberChip extends StatelessWidget {
+  final String regNumber;
+  final VoidCallback onCopy;
+
+  const _RegNumberChip({
+    required this.regNumber,
+    required this.onCopy,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.confirmation_number_rounded,
+              size: 16, color: Colors.white),
+          const SizedBox(width: 6),
+          Text(
+            regNumber.toUpperCase(),
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: onCopy,
+            child: const Icon(
+              Icons.copy_rounded,
+              color: Colors.white70,
+              size: 16,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CapturePreviewButton extends StatelessWidget {
+  final String path;
+  final String label;
+  final IconData icon;
+
+  const _CapturePreviewButton({
+    required this.path,
+    required this.label,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (path.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: TextButton.icon(
+        onPressed: () async {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => Dialog(
+              insetPadding: const EdgeInsets.all(20),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.file(
+                  File(path),
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+          );
+        },
+        style: TextButton.styleFrom(
+          foregroundColor: Colors.white70,
+        ),
+        icon: Icon(icon, size: 18),
+        label: Text(label),
       ),
     );
   }
