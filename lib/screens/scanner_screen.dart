@@ -375,13 +375,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final result = await _scanFromPhoto();
     if (!mounted) return;
     if (result != null && result.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _wideShotCaptured ? 'Packaging updated.' : 'Packaging captured.',
-          ),
-        ),
-      );
       if (!_regShotCaptured && !_regCaptureSkipped) {
         setState(() => _activeCaptureStep = _CaptureStep.regNumber);
       }
@@ -403,13 +396,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     });
     final result = await _scanFromPhoto();
     if (!mounted) return;
-    if (result != null && result.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Reg capture saved.'),
-        ),
-      );
-    } else {
+    if (result == null || result.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Reg capture looked unclear. Try again.'),
@@ -424,11 +411,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _wideShotCaptured = false;
       _activeCaptureStep = _CaptureStep.regNumber;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Packaging image check skipped.'),
-      ),
-    );
   }
 
   void _resumePackagingCapture() {
@@ -444,11 +426,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _regShotCaptured = false;
       _activeCaptureStep = _CaptureStep.regNumber;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Reg capture skipped. We will use OCR text.'),
-      ),
-    );
   }
 
   void _resumeRegCapture() {
@@ -1221,15 +1198,16 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
     final IconData captureIcon =
         isPackaging ? Icons.camera_alt_rounded : Icons.document_scanner_rounded;
-    final IconData mainIcon = isConfirmStage
+    final bool confirmMode = isConfirmStage;
+    final IconData mainIcon = confirmMode
         ? Icons.check_rounded
         : (captured ? Icons.refresh_rounded : captureIcon);
-    final String mainLabel = isConfirmStage
-        ? (_isMatching ? 'Matching…' : 'Confirm scan')
+    final String mainLabel = confirmMode
+        ? (_isMatching ? 'Matching...' : 'Confirm scan')
         : (captured
             ? (isPackaging ? 'Retake packaging' : 'Retake reg number')
             : (isPackaging ? 'Capture packaging' : 'Capture reg number'));
-    final VoidCallback? mainAction = isConfirmStage
+    final VoidCallback? mainAction = confirmMode
         ? (confirmEnabled ? _confirmScan : null)
         : (disabled
             ? null
@@ -1248,19 +1226,29 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
     final VoidCallback? stepToggle = disabled
         ? null
-        : () => setState(() {
-              _activeCaptureStep = isPackaging
+        : () {
+            setState(() {
+              final nextStep = isPackaging
                   ? _CaptureStep.regNumber
                   : _CaptureStep.packaging;
+              _activeCaptureStep = nextStep;
+              if (nextStep == _CaptureStep.regNumber) {
+                _pendingRegCapture = !_regShotCaptured;
+              } else {
+                _pendingRegCapture = false;
+              }
             });
+          };
 
-    final String stepTitle = isConfirmStage
+    final String stepTitle = confirmMode
         ? 'Step 3 - Confirm'
         : (isPackaging ? 'Step 1 - Packaging' : 'Step 2 - Registration');
-    final String statusText = isConfirmStage
+    final String statusText = confirmMode
         ? (_isMatching ? 'Matching in progress' : 'Ready to submit')
         : (skipped
-            ? 'Skipped (uses OCR text)'
+            ? (isPackaging
+                ? 'Skipped (uses packaging photo only)'
+                : 'Skipped (uses packaging text)')
             : (captured ? 'Capture saved' : 'Ready to capture'));
 
     return SafeArea(

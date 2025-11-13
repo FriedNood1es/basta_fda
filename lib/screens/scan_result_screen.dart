@@ -103,26 +103,111 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     _alertShown = true;
     showDialog<void>(
       context: context,
+      barrierDismissible: true,
       builder: (ctx) {
         final theme = Theme.of(ctx);
-        return AlertDialog(
-          title: Row(
+        return Dialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(Icons.warning_amber_rounded,
-                  color: theme.colorScheme.error),
-              const SizedBox(width: 8),
-              const Text('Packaging alert'),
+              Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      theme.colorScheme.error,
+                      theme.colorScheme.error.withAlpha(215),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.warning_amber_rounded,
+                            color: Colors.white, size: 28),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Packaging alert',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Suspicious cues are stronger than authentic cues. Pause and inspect the pack before logging it.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _AlertBullet(
+                      icon: Icons.verified_outlined,
+                      text:
+                          'Compare colors, fonts, and seals with a trusted product photo.',
+                    ),
+                    _AlertBullet(
+                      icon: Icons.fact_check_rounded,
+                      text:
+                          'If you bought this recently, check the receipt or supplier for red flags.',
+                    ),
+                    _AlertBullet(
+                      icon: Icons.report_problem_outlined,
+                      text:
+                          'Report the pack if tampering, spelling mistakes, or stickered dates are present.',
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 24, thickness: 1, indent: 20, endIndent: 20),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    FilledButton(
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        _showRedFlagsChecklist(context);
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: theme.colorScheme.error,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      child: const Text('Review red flags'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('Inspect packaging'),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
-          content: const Text(
-            'The packaging helper model spotted more suspicious cues than authentic ones. Compare this pack to official photos and report it if anything looks tampered.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Inspect packaging'),
-            ),
-          ],
         );
       },
     );
@@ -997,6 +1082,34 @@ class _InfoBanner extends StatelessWidget {
           ),
         ),
         subtitle: Text(message),
+      ),
+    );
+  }
+}
+
+class _AlertBullet extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const _AlertBullet({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: theme.colorScheme.error),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: theme.textTheme.bodyMedium,
+            ),
+          ),
+        ],
       ),
     );
   }
