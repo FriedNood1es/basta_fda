@@ -112,6 +112,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                             imageResultFuture: null,
                             confirmedRegNumber: e.regNumber,
                             isImageTrainedProduct: e.imageTrainedProduct,
+                            packagingImagePath: e.packagingImagePath,
                           ),
                         ),
                       );

@@ -13,6 +13,7 @@ class HistoryEntry {
   final ImageCheckStatus imageStatus;
   final String? regNumber;
   final bool imageTrainedProduct;
+  final String? packagingImagePath;
 
   HistoryEntry({
     required this.timestamp,
@@ -24,6 +25,7 @@ class HistoryEntry {
     required this.imageStatus,
     this.regNumber,
     this.imageTrainedProduct = false,
+    this.packagingImagePath,
   });
 
   Map<String, dynamic> toJson() => {
@@ -36,6 +38,7 @@ class HistoryEntry {
         'imageStatus': imageStatus.name,
         'regNumber': regNumber,
         'imageTrainedProduct': imageTrainedProduct,
+        'packagingImagePath': packagingImagePath,
       };
 
   static HistoryEntry fromJson(Map<String, dynamic> json) {
@@ -91,6 +94,14 @@ class HistoryEntry {
         return null;
       })(),
       imageTrainedProduct: json['imageTrainedProduct'] == true,
+      packagingImagePath: (() {
+        final raw = json['packagingImagePath'];
+        if (raw is String) {
+          final trimmed = raw.trim();
+          if (trimmed.isNotEmpty) return trimmed;
+        }
+        return null;
+      })(),
     );
   }
 }
@@ -191,6 +202,7 @@ class HistoryService {
     required ImageCheckStatus imageStatus,
     String? regNumber,
     bool imageTrainedProduct = false,
+    String? packagingImagePath,
   }) async {
     await load();
     _entries.add(
@@ -204,6 +216,7 @@ class HistoryService {
         imageStatus: imageStatus,
         regNumber: regNumber,
         imageTrainedProduct: imageTrainedProduct,
+        packagingImagePath: packagingImagePath,
       ),
     );
     await _persist();
