@@ -11,18 +11,21 @@ import 'package:basta_fda/screens/scanner_screen.dart';
 import 'package:basta_fda/services/fda_checker.dart';
 
 void main() {
-  testWidgets('ScannerScreen loads Scan button', (WidgetTester tester) async {
+  // Skip: ScannerScreen requires real cameras; omit in headless test env.
+  testWidgets('ScannerScreen renders without camera when disabled',
+      (WidgetTester tester) async {
     final fdaChecker = FDAChecker();
 
     await tester.pumpWidget(MaterialApp(
       home: ScannerScreen(
-        cameras: [], // Empty for testing
-        fdaChecker: fdaChecker,
+        cameras: const [],
+        fdaChecker: FDAChecker(),
+        cameraEnabled: false,
       ),
     ));
 
-    // Verify that Scan Product button exists
     expect(find.text('Scan Product'), findsOneWidget);
+    expect(find.text('Camera disabled in test mode'), findsOneWidget);
   });
 }
 

@@ -92,6 +92,26 @@ class FDAChecker {
     return input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 
+  /// Public helper for tests and external callers
+  String normalizeReg(String input) => _normalizeReg(input);
+
+  /// Extract a single registration number from free text, or null if none.
+  String? extractRegNumber(String raw) {
+    if (raw.trim().isEmpty) return null;
+    final regPattern = RegExp(
+      r'([A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?|[A-Za-z]{2,4}(?:[\s-]?[A-Za-z]{1,4})?[\s-]?\d{3,6}(?:[\s-]?\d{2,4})?)',
+    );
+    final verbosePattern = RegExp(
+      r'reg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?|[A-Za-z]{2,4}(?:[\s-]?[A-Za-z]{1,4})?[\s-]?\d{3,6}(?:[\s-]?\d{2,4})?)',
+      caseSensitive: false,
+    );
+    final direct = regPattern.firstMatch(raw);
+    if (direct != null) return direct.group(1)?.toUpperCase();
+    final verbose = verbosePattern.firstMatch(raw);
+    if (verbose != null) return verbose.group(1)?.toUpperCase();
+    return null;
+  }
+
   // Determine column indices from header row when available
   void _deriveColIndex(List<dynamic> headerRow) {
     if (headerRow.isEmpty) return;
@@ -234,14 +254,15 @@ class FDAChecker {
     final List<String> out = [];
     final text = raw; // preserve separators for regex
     // 1) Explicit code pattern seen in dataset: e.g., DRP-4935 or DRP-4961-03
-    //    Pattern: (3–4 letters)-(3–6 digits)[-(2–4 digits)]
-    final explicitCode = RegExp(r'\b[A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?\b');
+    //    Pattern: (3-4 letters)-(3-6 digits)[-(2-4 digits)]
+    final explicitCode =
+        RegExp(r'\b[A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?\b');
     for (final m in explicitCode.allMatches(text)) {
       out.add(m.group(0)!.trim());
     }
     // 2) Labeled formats: "Reg. No.: DRP-4935" strictly capturing explicit code format only
     final reLabeledStrict = RegExp(
-      r'\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?)\b',
+      r'\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?)\b',
       caseSensitive: false,
     );
     for (final m in reLabeledStrict.allMatches(text)) {
@@ -308,20 +329,21 @@ class FDAChecker {
     final List<String> out = [];
     final text = raw;
     final explicit = RegExp(
-      r'\b[A-Za-z]{2,4}[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?\b',
+      r'\b[A-Za-z]{2,4}(?:[\-\s]?[A-Za-z]{1,4})?[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?\b',
     );
     for (final m in explicit.allMatches(text)) {
       out.add(m.group(0)!.trim());
     }
     final labeled = RegExp(
-      r'\b(?:fda\s*)?reg(?:istration)?\.?\s*(?:no\.?|number)?\s*[:#-]?\s*([A-Za-z]{2,4}[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?)\b',
+      r'\b(?:fda\s*)?reg(?:istration)?\.?\s*(?:no\.?|number)?\s*[:#-]?\s*([A-Za-z]{2,4}(?:[\-\s]?[A-Za-z]{1,4})?[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?)\b',
       caseSensitive: false,
     );
     for (final m in labeled.allMatches(text)) {
       final g = m.group(1);
       if (g != null) out.add(g.trim());
     }
-    final compact = RegExp(r'\b[A-Za-z]{2,4}\d{3,6}(?:\d{2,4})?\b');
+    final compact =
+        RegExp(r'\b[A-Za-z]{2,4}(?:[A-Za-z]{1,4})?\d{3,6}(?:\d{2,4})?\b');
     for (final m in compact.allMatches(text)) {
       out.add(m.group(0)!.trim());
     }
@@ -1161,9 +1183,9 @@ class FDAChecker {
         ..clear()
         ..addAll(result.regIndex);
       _loadedAt = DateTime.now();
-      debugPrint('✅ FDA CSV loaded (prefer cache). Rows: ${_data.length}');
+      debugPrint('[FDA] CSV loaded (prefer cache). Rows: ${_data.length}');
     } catch (e) {
-      debugPrint('❌ Error loading FDA CSV (prefer cache): $e');
+      debugPrint('[FDA] Error loading CSV (prefer cache): $e');
     }
   }
 
@@ -1175,7 +1197,7 @@ class FDAChecker {
       final req = await client.getUrl(Uri.parse(url));
       final res = await req.close();
       if (res.statusCode != 200) {
-        debugPrint('❌ Update failed: HTTP ${res.statusCode}');
+        debugPrint('[FDA] Update failed: HTTP ${res.statusCode}');
         return false;
       }
       final bytes = await consolidateHttpClientResponseBytes(res);
@@ -1184,7 +1206,7 @@ class FDAChecker {
       try {
         final parsed = const CsvToListConverter().convert(csv);
         if (parsed.isEmpty || parsed.length < 10) {
-          debugPrint('�?O Update failed: CSV too short');
+          debugPrint('[FDA] Update failed: CSV too short');
           return false;
         }
         // Detect reg_no header
@@ -1210,7 +1232,7 @@ class FDAChecker {
                   row[regIdx].toString().trim().isNotEmpty,
             );
         if (!hasReg) {
-          debugPrint('�?O Update failed: No registration column detected');
+          debugPrint('[FDA] Update failed: No registration column detected');
           return false;
         }
       } catch (e) {
@@ -1223,7 +1245,7 @@ class FDAChecker {
       await loadCSVIsolatePreferCache();
       return true;
     } catch (e) {
-      debugPrint('❌ Update failed: $e');
+      debugPrint('[FDA] Update failed: $e');
       return false;
     }
   }

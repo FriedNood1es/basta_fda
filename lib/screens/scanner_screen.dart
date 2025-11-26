@@ -19,11 +19,13 @@ import 'package:basta_fda/data/packaging_trained_products.dart';
 class ScannerScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
   final FDAChecker fdaChecker;
+  final bool cameraEnabled;
 
   const ScannerScreen({
     super.key,
     required this.cameras,
     required this.fdaChecker,
+    this.cameraEnabled = true,
   });
 
   @override
@@ -37,6 +39,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   bool _isInitialized = false;
   bool _isMatching = false;
   bool _torchOn = false;
+  bool _updatingFda = false;
   String _extractedText = "";
   final TextRecognizer _textRecognizer = TextRecognizer(
     script: TextRecognitionScript.latin,
@@ -82,7 +85,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
   @override
   void initState() {
     super.initState();
-    _initCamera();
+    if (widget.cameraEnabled) {
+      _initCamera();
+    } else {
+      _isInitialized = true;
+    }
     // Load user settings
     SettingsService.instance.load().then((_) {
       if (!mounted) return;
@@ -196,6 +203,49 @@ class _ScannerScreenState extends State<ScannerScreen> {
         _lastRawText = null;
       }
     });
+  }
+
+  Future<void> _handleScanResultReturn(Object? result) async {
+    if (!mounted || result != ScanResultScreen.viewHistoryResult) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const HistoryScreen()),
+    );
+  }
+
+  Future<void> _refreshFdaData() async {
+    if (_updatingFda) return;
+    setState(() => _updatingFda = true);
+    final navigator = Navigator.of(context);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: const [
+              Text(
+                'Refreshing FDA database…',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              SizedBox(height: 12),
+              LinearProgressIndicator(),
+            ],
+          ),
+        );
+      },
+    );
+    try {
+      await widget.fdaChecker.ensureLoadedAndFresh();
+      await widget.fdaChecker.loadCSVIsolatePreferCache();
+    } finally {
+      if (navigator.canPop()) {
+        navigator.pop();
+      }
+      if (mounted) setState(() => _updatingFda = false);
+    }
   }
 
 
@@ -342,12 +392,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _lastRawText = rawText;
       final scannedText = _composeTextFromResult(result);
 
-      debugPrint('----- OCR RAW TEXT START -----');
-      debugPrint(rawText);
-      debugPrint('----- OCR RAW TEXT END -----');
-      debugPrint('----- OCR CLEANED TEXT START -----');
-      debugPrint(scannedText);
-      debugPrint('----- OCR CLEANED TEXT END -----');
+      debugPrint('[OCR] raw (${rawText.length} chars): ${rawText.replaceAll('\n', ' ')}');
+      debugPrint('[OCR] cleaned (${scannedText.length} chars): $scannedText');
 
       if (!mounted) return scannedText;
       final bool treatAsRegCapture =
@@ -369,8 +415,55 @@ class _ScannerScreenState extends State<ScannerScreen> {
       });
       return scannedText;
     } catch (e) {
-      debugPrint('OCR photo scan error: $e');
+      debugPrint('[OCR] photo scan error: $e');
       return null;
+    } finally {
+      if (mounted) {
+        setState(() => _isCapturing = false);
+        try {
+          await _controller!.unlockCaptureOrientation();
+        } catch (_) {}
+      }
+    }
+  }
+
+
+  Future<bool> _capturePackagingPhoto() async {
+    if (!mounted || _controller == null || !_controller!.value.isInitialized) {
+      return false;
+    }
+    try {
+      setState(() => _isCapturing = true);
+      await _stopStream();
+
+      try {
+        final center = const Offset(0.5, 0.5);
+        await _controller!.setFocusMode(FocusMode.auto);
+        try {
+          await _controller!.setExposureMode(ExposureMode.auto);
+        } catch (_) {}
+        await _controller!.setFocusPoint(center);
+        await _controller!.setExposurePoint(center);
+        await Future.delayed(const Duration(milliseconds: 450));
+      } catch (_) {}
+
+      try {
+        await _controller!.lockCaptureOrientation();
+      } catch (_) {}
+
+      final XFile file = await _controller!.takePicture();
+      _lastCapturedImagePath = file.path;
+      setState(() {
+        _packagingImagePath = file.path;
+        _wideShotCaptured = true;
+        if (!_regShotCaptured && !_regCaptureSkipped) {
+          _activeCaptureStep = _CaptureStep.regNumber;
+        }
+      });
+      return true;
+    } catch (e) {
+      debugPrint('[PACKAGING] photo error: $e');
+      return false;
     } finally {
       if (mounted) {
         setState(() => _isCapturing = false);
@@ -388,13 +481,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _packageCaptureSkipped = false;
       _pendingRegCapture = false;
     });
-    final result = await _scanFromPhoto();
+    final success = await _capturePackagingPhoto();
     if (!mounted) return;
-    if (result != null && result.isNotEmpty) {
-      if (!_regShotCaptured && !_regCaptureSkipped) {
-        setState(() => _activeCaptureStep = _CaptureStep.regNumber);
-      }
-    } else {
+    if (!success) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Could not capture packaging clearly. Try again.'),
@@ -508,16 +597,41 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }
 
   Future<void> _matchScannedText() async {
-    // Honor setting: skip review if disabled
     final wantsReview = SettingsService.instance.reviewBeforeSearch;
+    final bool regSkipped = _regCaptureSkipped;
+
     if (!wantsReview) {
+      if (regSkipped) {
+        await _executeSearch(
+          '',
+          rawOverride: '',
+          skipImageCheck: _packageCaptureSkipped,
+        );
+        return;
+      }
+      if (_confirmedRegNumber != null &&
+          !_pendingRegCapture &&
+          !_regSelectionPending) {
+        await _executeSearch(
+          _confirmedRegNumber!,
+          rawOverride: _confirmedRegNumber!,
+          skipImageCheck: _packageCaptureSkipped,
+        );
+        return;
+      }
       final text = await _scanFromPhoto();
       if (text != null && text.isNotEmpty) {
         await _executeSearch(text, skipImageCheck: false);
       }
       return;
     }
-    await _reviewAndSearch();
+
+    await _reviewAndSearch(
+      capturePhoto: !regSkipped,
+      preset: regSkipped ? '' : null,
+      rawOverride: regSkipped ? '' : null,
+      allowImageCheck: true,
+    );
   }
 
   Future<void> _reviewAndSearch({
@@ -526,15 +640,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
     bool capturePhoto = true,
     bool allowImageCheck = true,
   }) async {
-    // Start with preset or capture a fresh still for reliable OCR
-    final first = capturePhoto ? await _scanFromPhoto() : preset;
-    if (!mounted) return;
-    String working = first ?? _extractedText;
-
     if (_regCaptureSkipped) {
       await _executeSearch(
-        working,
-        rawOverride: rawOverride ?? _lastRawText ?? working,
+        preset ?? '',
+        rawOverride: rawOverride ?? '',
         skipImageCheck: !allowImageCheck || _packageCaptureSkipped,
       );
       return;
@@ -550,6 +659,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
       );
       return;
     }
+
+    // Start with preset or capture a fresh still for reliable OCR
+    final first = capturePhoto ? await _scanFromPhoto() : preset;
+    if (!mounted) return;
+    String working = first ?? _extractedText;
 
     final rawForReg = rawOverride ?? _lastRawText ?? working;
     final selected = await _promptRegSelection(
@@ -621,11 +735,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
       final trimmedInput = text.trim();
       final raw = (rawOverride ?? _lastRawText ?? text).trim();
-      if (trimmedInput.isNotEmpty) {
-        _confirmedRegNumber = trimmedInput;
-      } else if (raw.isNotEmpty) {
-        _confirmedRegNumber = raw;
-      }
+      _confirmedRegNumber =
+          _extractRegNumber(trimmedInput) ?? _extractRegNumber(raw);
 
       final byReg = widget.fdaChecker.findByRegNo(raw);
       final regLike =
@@ -735,6 +846,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
         final registrationStatus = RegistrationStatus.registered;
         final historyProduct = Map<String, String>.from(nonNullProduct);
+        final capturedPackagingPath = _packagingImagePath;
         unawaited(
           imageResultFuture.then((imageResult) async {
             await HistoryService.instance.addEntry(
@@ -746,12 +858,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
               imageStatus: imageResult.status,
               regNumber: _confirmedRegNumber,
               imageTrainedProduct: isImageTrainedProduct,
+              packagingImagePath: capturedPackagingPath,
             );
           }),
         );
 
         if (!mounted) return;
-        await Navigator.push(
+        final navResult = await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => ScanResultScreen(
@@ -761,11 +874,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
               initialImageResult: initialImageResult,
               imageResultFuture: imageResultFuture,
               confirmedRegNumber: _confirmedRegNumber,
+              packagingImagePath: capturedPackagingPath,
               isImageTrainedProduct: isImageTrainedProduct,
             ),
           ),
         );
         _resetCaptureFlow(clearText: true);
+        await _handleScanResultReturn(navResult);
       } else {
         if (skipImageCheck) {
           imageResultFuture = Future.value(
@@ -783,6 +898,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
           dialogShown = false;
           await Future<void>.delayed(Duration.zero);
         }
+        final capturedPackagingPath = _packagingImagePath;
         final imageResult = await imageResultFuture;
         final imageRecognized = imageResult.status == ImageCheckStatus.recognized &&
             (imageResult.info?['product']?.isNotEmpty ?? false);
@@ -809,9 +925,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
             imageStatus: imageResult.status,
             regNumber: _confirmedRegNumber,
             imageTrainedProduct: true,
+            packagingImagePath: capturedPackagingPath,
           );
           if (!mounted) return;
-          await Navigator.push(
+          final navResult = await Navigator.push(
             context,
             MaterialPageRoute(
               builder: (context) => ScanResultScreen(
@@ -821,11 +938,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 initialImageResult: imageResult,
                 imageResultFuture: null,
                 confirmedRegNumber: _confirmedRegNumber,
+                packagingImagePath: capturedPackagingPath,
                 isImageTrainedProduct: true,
               ),
             ),
           );
           _resetCaptureFlow(clearText: false);
+          await _handleScanResultReturn(navResult);
         } else {
           await HistoryService.instance.addEntry(
             scannedText: raw,
@@ -835,6 +954,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
             registrationStatus: RegistrationStatus.unregistered,
             imageStatus: imageResult.status,
             regNumber: _confirmedRegNumber,
+            packagingImagePath: capturedPackagingPath,
           );
           if (!mounted) return;
           setState(() => _extractedText = raw);
@@ -865,9 +985,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
   String? _extractRegNumber(String input) {
     final trimmed = input.trim();
     if (trimmed.isEmpty) return null;
-    final regPattern = RegExp(r'([A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?)');
+    final regPattern = RegExp(
+      r'([A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?|[A-Za-z]{2,4}(?:[\s-]?[A-Za-z]{1,4})?[\s-]?\d{3,6}(?:[\s-]?\d{2,4})?)',
+    );
     final verbosePattern = RegExp(
-      r'reg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?)',
+      r'reg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?|[A-Za-z]{2,4}(?:[\s-]?[A-Za-z]{1,4})?[\s-]?\d{3,6}(?:[\s-]?\d{2,4})?)',
       caseSensitive: false,
     );
     final direct = regPattern.firstMatch(trimmed);
@@ -898,7 +1020,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
             return SafeArea(
-              child: Padding(
+              child: SingleChildScrollView(
                 padding: EdgeInsets.fromLTRB(20, 20, 20, bottom + 16),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -1011,6 +1133,18 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!widget.cameraEnabled) {
+      return Scaffold(
+        appBar: AppBar(
+          centerTitle: true,
+          title: const Text('Scan Product'),
+        ),
+        body: const Center(
+          child: Text('Camera disabled in test mode'),
+        ),
+      );
+    }
+
     if (!_isInitialized || _controller == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
@@ -1136,18 +1270,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
               left: 12,
               right: 12,
               child: GestureDetector(
-                onTap: () async {
-                  final messenger = ScaffoldMessenger.of(context);
-                  messenger.showSnackBar(
-                    const SnackBar(content: Text('Checking for FDA updates?')),
-                  );
-                  await widget.fdaChecker.ensureLoadedAndFresh();
-                  if (!mounted) return;
-                  setState(() {});
-                  messenger.showSnackBar(
-                    const SnackBar(content: Text('Update check complete')),
-                  );
-                },
+                onTap: _updatingFda ? null : () async => _refreshFdaData(),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 10,
@@ -1273,7 +1396,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                               number: '1',
                               title: 'Capture the packaging (optional)',
                               body:
-                                  'Take a clear photo of the label if your product is in our trained references so the app can compare colors, logos, and seals.',
+                                  'Take a clear photo of the label if your product is in our trained references so the app can compare packaging cues.',
                             ),
                             const SizedBox(height: 12),
                             const _GuideStep(
@@ -1288,6 +1411,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
                               title: 'Confirm the scan',
                               body:
                                   'After both steps are captured or skipped, tap Confirm. We match the text against FDA records and use the packaging helper if available.',
+                            ),
+                            const SizedBox(height: 12),
+                            const _GuideStep(
+                              number: '4',
+                              title: 'Using the reg number',
+                              body:
+                                  'If you tap "Use this number" in the selection sheet, we search with that code directly—no extra photo or OCR.',
                             ),
                             const SizedBox(height: 18),
                             SizedBox(

@@ -20,12 +20,14 @@ import 'package:basta_fda/services/settings_service.dart';
 import 'package:basta_fda/models/scan_verdict.dart';
 
 class ScanResultScreen extends StatefulWidget {
+  static const viewHistoryResult = 'view_history';
   final Map<String, String> productInfo;
   final String status;
   final RegistrationStatus registrationStatus;
   final ImageCheckResult initialImageResult;
   final Future<ImageCheckResult>? imageResultFuture;
   final String? confirmedRegNumber;
+  final String? packagingImagePath;
   final bool isImageTrainedProduct;
 
   const ScanResultScreen({
@@ -36,6 +38,7 @@ class ScanResultScreen extends StatefulWidget {
     required this.initialImageResult,
     this.imageResultFuture,
     this.confirmedRegNumber,
+    this.packagingImagePath,
     this.isImageTrainedProduct = false,
   });
 
@@ -213,6 +216,128 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     );
   }
 
+  String _titleCase(String? s) {
+    if (s == null || s.isEmpty) return 'N/A';
+    return s
+        .split(' ')
+        .map(
+          (w) => w.isEmpty
+              ? w
+              : (w[0].toUpperCase() + (w.length > 1 ? w.substring(1) : '')),
+        )
+        .join(' ');
+  }
+
+  bool _packagingFileExists(String? path) {
+    if (path == null || path.isEmpty) return false;
+    try {
+      return File(path).existsSync();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _copyRegNumber(String value) async {
+    await Clipboard.setData(ClipboardData(text: value));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Registration number copied')),
+    );
+  }
+
+  Future<void> _shareScanSummary() async {
+    final info = widget.productInfo;
+    final buffer = StringBuffer()
+      ..writeln('bastaFDA scan summary')
+      ..writeln('')
+      ..writeln('Registration status: ${widget.registrationStatus.label}')
+      ..writeln('Scan status: ${widget.status}');
+    final brand = _titleCase(info['brand_name']);
+    if (brand != 'N/A') buffer.writeln('Brand: $brand');
+    final generic = _titleCase(info['generic_name']);
+    if (generic != 'N/A') buffer.writeln('Generic: $generic');
+    final manufacturer = _titleCase(info['manufacturer']);
+    if (manufacturer != 'N/A') buffer.writeln('Manufacturer: $manufacturer');
+    final regNumber = (() {
+      final confirmed = widget.confirmedRegNumber?.trim();
+      if (confirmed != null && confirmed.isNotEmpty) return confirmed;
+      final fromProduct = info['reg_no']?.trim();
+      if (fromProduct != null && fromProduct.isNotEmpty) return fromProduct;
+      return null;
+    })();
+    if (regNumber != null) buffer.writeln('Registration number: $regNumber');
+    final imageInfo = _imageResult.info;
+    buffer.writeln('Image helper status: ${_imageResult.status.label}');
+    if (imageInfo != null) {
+      final verdict = imageInfo['verdict'];
+      final confidence = imageInfo['confidence'];
+      final product = imageInfo['product'];
+      if (product != null && product.isNotEmpty) {
+        buffer.writeln('Packaging match: $product');
+      }
+      if (verdict != null && verdict.isNotEmpty) {
+        buffer.writeln('Image verdict: ${_titleCase(verdict)}');
+      }
+      if (confidence != null && confidence.isNotEmpty) {
+        buffer.writeln('Image confidence: $confidence');
+      }
+    }
+    buffer.writeln(
+      'Packaging photo: ${_packagingFileExists(widget.packagingImagePath) ? 'Captured' : 'Not provided'}',
+    );
+    await Share.share(
+      buffer.toString().trim(),
+      subject: 'bastaFDA scan result',
+    );
+  }
+
+  Future<void> _showPackagingFullPreview(String path) async {
+    if (!_packagingFileExists(path) || !mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final size = MediaQuery.of(ctx).size;
+        return Dialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          backgroundColor: Colors.black,
+          child: Stack(
+            children: [
+              SizedBox(
+                width: double.infinity,
+                height: size.height * 0.7,
+                child: InteractiveViewer(
+                  minScale: 0.75,
+                  maxScale: 4,
+                  child: Image.file(
+                    File(path),
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) => Center(
+                      child: Text(
+                        'Unable to load photo',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodyMedium
+                            ?.copyWith(color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: IconButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  icon: const Icon(Icons.close_rounded, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   void _showRedFlagsChecklist(BuildContext context) {
     const redFlags = [
       'Seals or blister packs look broken, resealed, or tampered.',
@@ -334,23 +459,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
   @override
   Widget build(BuildContext context) {
-    String titleCase(String? s) {
-      if (s == null || s.isEmpty) return 'N/A';
-
-      return s
-          .split(' ')
-          .map(
-            (w) => w.isEmpty
-                ? w
-                : (w[0].toUpperCase() + (w.length > 1 ? w.substring(1) : '')),
-          )
-          .join(' ');
-    }
-
-    String upperOrNA(String? s) =>
-        (s == null || s.isEmpty) ? 'N/A' : s.toUpperCase();
-
-    String niceDate(String? s) => titleCase(s);
+    String niceDate(String? s) => _titleCase(s);
 
     Color statusColor(String status, ThemeData theme) {
       switch (status.toUpperCase()) {
@@ -377,7 +486,14 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     final primary = theme.colorScheme.primary;
     final imageInfo = _imageResult.info;
     final imageVerdict = imageInfo?['verdict'] ?? '';
-    final regNo = upperOrNA(productInfo['reg_no']);
+    final confirmedRegRaw = widget.confirmedRegNumber?.trim();
+    final fallbackRegRaw = productInfo['reg_no']?.trim();
+    final copyableRegNumber = (confirmedRegRaw != null && confirmedRegRaw.isNotEmpty)
+        ? confirmedRegRaw
+        : (fallbackRegRaw != null && fallbackRegRaw.isNotEmpty
+            ? fallbackRegRaw
+            : null);
+    final regNoLabel = copyableRegNumber?.toUpperCase() ?? 'N/A';
     final sColor = statusColor(status, theme);
     final registrationColor =
         widget.registrationStatus == RegistrationStatus.registered
@@ -409,6 +525,14 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     final imageCategory = imageInfo?['category'] ?? '';
     final imageConfidence = imageInfo?['confidence'] ?? '';
     final imageSource = imageInfo?['source'] ?? '';
+    final String? packagingPath = widget.packagingImagePath;
+    final hasPackagingPhoto = _packagingFileExists(packagingPath);
+    final Widget? packagingPreview = hasPackagingPhoto && packagingPath != null
+        ? _PackagingPreviewCard(
+            path: packagingPath,
+            onTap: () => _showPackagingFullPreview(packagingPath),
+          )
+        : null;
 
     final Widget? packagingSection = () {
       final breakdown = _imageConfidenceBreakdown();
@@ -417,7 +541,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
           return _ImageConfidenceCard(
             authenticScore: breakdown['authentic'] ?? 0,
             suspiciousScore: breakdown['suspicious'] ?? 0,
-            productName: titleCase(productInfo['brand_name']),
+            productName: _titleCase(productInfo['brand_name']),
           );
         }
         if (_imageResult.status == ImageCheckStatus.pending) {
@@ -486,14 +610,14 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              titleCase(productInfo['brand_name']),
+                              _titleCase(productInfo['brand_name']),
                               style: theme.textTheme.titleLarge?.copyWith(
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              'Registration No.: $regNo',
+                              'Registration No.: $regNoLabel',
                               style: theme.textTheme.bodyMedium?.copyWith(
                                 color: theme.hintColor,
                               ),
@@ -527,17 +651,25 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                         color: imageColor,
                         icon: Icons.image_search_rounded,
                       ),
+                      if (copyableRegNumber != null)
+                        _RegNumberChip(
+                          regNumber: copyableRegNumber.toUpperCase(),
+                          onCopy: () => _copyRegNumber(copyableRegNumber),
+                        ),
                     ],
                   ),
                 ],
               ),
             ),
 
-            if (packagingSection != null) ...[
+            if (packagingPreview != null || packagingSection != null) ...[
               const SizedBox(height: 20),
-              const _SectionHeader(label: 'Packaging confidence'),
+              const _SectionHeader(label: 'Packaging review'),
               const SizedBox(height: 8),
-              packagingSection,
+              if (packagingPreview != null) packagingPreview,
+              if (packagingPreview != null && packagingSection != null)
+                const SizedBox(height: 12),
+              if (packagingSection != null) packagingSection,
             ],
 
             if (_imageResult.status.needsWarning) ...[
@@ -579,17 +711,9 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: regNo));
-
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Registration number copied'),
-                          ),
-                        );
-                      }
-                    },
+                    onPressed: copyableRegNumber == null
+                        ? null
+                        : () => _copyRegNumber(copyableRegNumber),
 
                     icon: const Icon(Icons.copy_rounded, size: 18),
 
@@ -601,11 +725,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Share coming soon')),
-                      );
-                    },
+                    onPressed: _shareScanSummary,
 
                     icon: const Icon(Icons.share_rounded, size: 18),
 
@@ -637,7 +757,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
                       label: 'Generic Name',
 
-                      value: titleCase(productInfo['generic_name']),
+                      value: _titleCase(productInfo['generic_name']),
                     ),
 
                     _DetailRow(
@@ -645,7 +765,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
                       label: 'Category',
 
-                      value: titleCase(productInfo['category']),
+                      value: _titleCase(productInfo['category']),
                     ),
 
                     _DetailRow(
@@ -661,7 +781,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
                       label: 'Dosage Form',
 
-                      value: titleCase(productInfo['dosage_form']),
+                      value: _titleCase(productInfo['dosage_form']),
                     ),
 
                     _DetailRow(
@@ -669,7 +789,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
                       label: 'Manufacturer',
 
-                      value: titleCase(productInfo['manufacturer']),
+                      value: _titleCase(productInfo['manufacturer']),
                     ),
 
                     _DetailRow(
@@ -677,7 +797,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
                       label: 'Country',
 
-                      value: titleCase(productInfo['country']),
+                      value: _titleCase(productInfo['country']),
                     ),
 
                     _DetailRow(
@@ -685,7 +805,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
                       label: 'Distributor',
 
-                      value: titleCase(productInfo['distributor']),
+                      value: _titleCase(productInfo['distributor']),
 
                       showDivider: false,
                     ),
@@ -718,9 +838,9 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       if (imageVerdict.isNotEmpty)
-                        Text('Verdict: ${titleCase(imageVerdict)}'),
+                        Text('Verdict: ${_titleCase(imageVerdict)}'),
                       if (imageCategory.isNotEmpty)
-                        Text('Category: ${titleCase(imageCategory)}'),
+                        Text('Category: ${_titleCase(imageCategory)}'),
                       if (imageConfidence.isNotEmpty)
                         Text('Confidence: $imageConfidence'),
                       if (imageSource.isNotEmpty)
@@ -955,9 +1075,83 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
               ),
             ),
 
+            const SizedBox(height: 12),
+
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.qr_code_scanner_rounded),
+                  label: const Text('Scan another product'),
+                ),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: () =>
+                      Navigator.of(context).pop(ScanResultScreen.viewHistoryResult),
+                  icon: const Icon(Icons.history_rounded),
+                  label: const Text('View scan history'),
+                ),
+              ],
+            ),
+
             const SizedBox(height: 16),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _PackagingPreviewCard extends StatelessWidget {
+  final String path;
+  final VoidCallback onTap;
+
+  const _PackagingPreviewCard({
+    required this.path,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AspectRatio(
+            aspectRatio: 4 / 3,
+            child: Image.file(
+              File(path),
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) => Container(
+                color: theme.colorScheme.surfaceContainerHighest,
+                alignment: Alignment.center,
+                child: const Text('Preview unavailable'),
+              ),
+            ),
+          ),
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 4,
+            ),
+            title: Text(
+              'Captured packaging photo',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            subtitle: const Text('Tap to zoom and inspect tampering cues.'),
+            trailing: Icon(
+              Icons.fullscreen_rounded,
+              color: theme.colorScheme.primary,
+            ),
+            onTap: onTap,
+          ),
+        ],
       ),
     );
   }
@@ -1155,6 +1349,60 @@ class _AlertBullet extends StatelessWidget {
   }
 }
 
+class _RegNumberChip extends StatelessWidget {
+  final String regNumber;
+  final VoidCallback onCopy;
+
+  const _RegNumberChip({
+    required this.regNumber,
+    required this.onCopy,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: onCopy,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: theme.colorScheme.outlineVariant),
+          color: theme.colorScheme.surface.withValues(alpha: 0.9),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.numbers_rounded, size: 18, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'REGISTRATION NO.',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    letterSpacing: 0.7,
+                    color: theme.hintColor,
+                  ),
+                ),
+                Text(
+                  regNumber,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(width: 8),
+            Icon(Icons.copy_rounded, size: 16, color: theme.hintColor),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _StatusChip extends StatelessWidget {
   final String title;
   final String value;
@@ -1292,6 +1540,11 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
 
   bool _submitting = false;
 
+  static const List<String> _adminEmails = [
+    'safety@bastafda.com',
+    'kentlozano45@gmail.com',
+  ];
+
   final ImagePicker _picker = ImagePicker();
 
   XFile? _selectedImage;
@@ -1369,6 +1622,35 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
             'Could not access the ${source == ImageSource.camera ? 'camera' : 'gallery'}.';
       });
     }
+  }
+
+  String _buildSummary() {
+    final imageSummary =
+        widget.imageInfo?['product'] ?? widget.imageInfo?['verdict'] ?? widget.imageStatus.label;
+    final summary = StringBuffer()
+      ..writeln('Suspicious Product Report')
+      ..writeln('Admins: ${_adminEmails.join(', ')}')
+      ..writeln('')
+      ..writeln('Category: $_category')
+      ..writeln('Description: ${_descCtrl.text.trim()}')
+      ..writeln('Contact: ${_contactCtrl.text.trim()}')
+      ..writeln('')
+      ..writeln('Brand: ${widget.productInfo['brand_name'] ?? ''}')
+      ..writeln('Generic: ${widget.productInfo['generic_name'] ?? ''}')
+      ..writeln('Confirmed Reg No: ${widget.confirmedRegNumber ?? widget.productInfo['reg_no'] ?? ''}')
+      ..writeln('Registration Status: ${widget.registrationStatus.label}')
+      ..writeln('Image Check: $imageSummary')
+      ..writeln(
+        'Dosage: ${widget.productInfo['dosage_form'] ?? ''} ${widget.productInfo['dosage_strength'] ?? ''}',
+      )
+      ..writeln('Manufacturer: ${widget.productInfo['manufacturer'] ?? ''}')
+      ..writeln('Distributor: ${widget.productInfo['distributor'] ?? ''}')
+      ..writeln('Country: ${widget.productInfo['country'] ?? ''}');
+    final conf = widget.imageInfo?['confidence'];
+    if (conf != null && conf.isNotEmpty) {
+      summary.writeln('Image Confidence: $conf');
+    }
+    return summary.toString();
   }
 
   void _removeImage() {
@@ -1801,60 +2083,34 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
                 SizedBox(
                   width: double.infinity,
 
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      final imageSummary = widget.imageInfo?['product'] ??
-                          widget.imageInfo?['verdict'] ??
-                          widget.imageStatus.label;
-                      final summary = StringBuffer()
-                        ..writeln('Suspicious Product Report')
-                        ..writeln('')
-                        ..writeln('Category: $_category')
-                        ..writeln('Description: ${_descCtrl.text.trim()}')
-                        ..writeln('Contact: ${_contactCtrl.text.trim()}')
-                        ..writeln('')
-                        ..writeln(
-                          'Brand: ${widget.productInfo['brand_name'] ?? ''}',
-                        )
-                        ..writeln(
-                          'Generic: ${widget.productInfo['generic_name'] ?? ''}',
-                        )
-                        ..writeln(
-                          'Confirmed Reg No: ${widget.confirmedRegNumber ?? widget.productInfo['reg_no'] ?? ''}',
-                        )
-                        ..writeln(
-                          'Registration Status: ${widget.registrationStatus.label}',
-                        )
-                        ..writeln(
-                          'Image Check: $imageSummary',
-                        )
-                        ..writeln(
-                          'Dosage: ${widget.productInfo['dosage_form'] ?? ''} ${widget.productInfo['dosage_strength'] ?? ''}',
-                        )
-                        ..writeln(
-                          'Manufacturer: ${widget.productInfo['manufacturer'] ?? ''}',
-                        )
-                        ..writeln(
-                          'Distributor: ${widget.productInfo['distributor'] ?? ''}',
-                        )
-                        ..writeln(
-                          'Country: ${widget.productInfo['country'] ?? ''}',
-                        );
-                      final conf = widget.imageInfo?['confidence'];
-                      if (conf != null && conf.isNotEmpty) {
-                        summary.writeln('Image Confidence: $conf');
-                      }
-
-                      await Share.share(
-                        summary.toString(),
-
-                        subject: 'Suspicious Product Report',
-                      );
-                    },
-
-                    icon: const Icon(Icons.share_rounded),
-
-                    label: const Text('Share report via...'),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          await Share.share(
+                            _buildSummary(),
+                            subject: 'Suspicious Product Report',
+                          );
+                        },
+                        icon: const Icon(Icons.share_rounded),
+                        label: const Text('Share report via...'),
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final subject = Uri.encodeComponent('Suspicious Product Report');
+                          final body = Uri.encodeComponent(_buildSummary());
+                          final mailto = _adminEmails
+                              .map((e) => Uri.encodeComponent(e))
+                              .join(',');
+                          final uri = 'mailto:$mailto?subject=$subject&body=$body';
+                          await Share.share(uri, subject: 'Send email to admin');
+                        },
+                        icon: const Icon(Icons.email_outlined),
+                        label: const Text('Email to admin'),
+                      ),
+                    ],
                   ),
                 ),
               ],

@@ -27,105 +27,212 @@ class PackagingTrainedProduct {
 
 class PackagingCoverage {
   static const List<PackagingTrainedProduct> products = [
+    // Supplements - Vitamins & Antioxidants
     PackagingTrainedProduct(
-      category: 'Medicine',
+      category: 'Supplements · Vitamins & Antioxidants',
+      name: 'MX3',
+      keywords: ['mx3'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Supplements · Vitamins & Antioxidants',
+      name: 'Myra-E',
+      keywords: ['myra e', 'myra-e', 'tocopheryl'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Supplements · Vitamins & Antioxidants',
+      name: 'Enervon',
+      keywords: ['enervon'],
+    ),
+    // Supplements - Liver & Blood Health
+    PackagingTrainedProduct(
+      category: 'Supplements · Liver & Blood Health',
+      name: 'Liveraide',
+      keywords: ['liveraide'],
+    ),
+    // Food Products - 555 series
+    PackagingTrainedProduct(
+      category: 'Food · 555 Tuna Series',
+      name: '555 Tuna Afritada',
+      keywords: ['555 tuna', 'afritada'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Food · 555 Tuna Series',
+      name: '555 Tuna Mechado',
+      keywords: ['555 tuna', 'mechado'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Food · 555 Sardines Series',
+      name: '555 Sardines',
+      keywords: ['555 sardines'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Food · 555 Sardines Series',
+      name: '555 Sardines (Spicy)',
+      keywords: ['555 sardines', 'spicy'],
+    ),
+    // Food Products - Mega Sardines series
+    PackagingTrainedProduct(
+      category: 'Food · Mega Sardines Series',
+      name: 'Mega Sardines (Green)',
+      keywords: ['mega sardines', 'green'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Food · Mega Sardines Series',
+      name: 'Mega Sardines (Red)',
+      keywords: ['mega sardines', 'red'],
+    ),
+    // Other common food brands
+    PackagingTrainedProduct(
+      category: 'Food · Corned Beef',
+      name: 'Argentina Corned Beef',
+      keywords: ['argentina corned beef', 'argentina corned'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Food · Corned Beef',
+      name: 'Holiday Corned Beef',
+      keywords: ['holiday corned beef', 'holiday corned'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Food · Noodles',
+      name: 'Lucky Me! Noodles',
+      keywords: ['lucky me', 'noodles'],
+    ),
+    // Cosmetics / Personal Care
+    PackagingTrainedProduct(
+      category: 'Cosmetics / Personal Care',
+      name: 'Ashley',
+      keywords: ['ashley'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Cosmetics / Personal Care',
+      name: 'Careline',
+      keywords: ['careline'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Cosmetics / Personal Care',
+      name: 'DW',
+      keywords: ['dw'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Cosmetics / Personal Care',
+      name: 'Fairy Skin',
+      keywords: ['fairy skin'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Cosmetics / Personal Care',
+      name: 'Hally',
+      keywords: ['hally'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Cosmetics / Personal Care',
+      name: 'Human Nature',
+      keywords: ['human nature'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Cosmetics / Personal Care',
+      name: 'Kiko Milano',
+      keywords: ['kiko milano', 'kiko'],
+    ),
+    // Medicines - Paracetamol
+    PackagingTrainedProduct(
+      category: 'Medicine · Paracetamol',
       name: 'Biogesic',
       keywords: ['biogesic', 'paracetamol'],
     ),
     PackagingTrainedProduct(
-      category: 'Medicine',
+      category: 'Medicine · Paracetamol',
+      name: 'Saridon',
+      keywords: ['saridon'],
+    ),
+    PackagingTrainedProduct(
+      category: 'Medicine · Paracetamol',
+      name: 'TGP Paracetamol',
+      keywords: ['tgp', 'paracetamol'],
+    ),
+    // Medicines - Combo cold/flu with paracetamol
+    PackagingTrainedProduct(
+      category: 'Medicine · Cold/Flu Combo',
       name: 'Bioflu',
-      keywords: ['bioflu', 'phenylephrine'],
+      keywords: ['bioflu'],
     ),
     PackagingTrainedProduct(
-      category: 'Medicine',
-      name: 'Alaxan',
-      keywords: ['alaxan', 'ibuprofen'],
+      category: 'Medicine · Cold/Flu Combo',
+      name: 'Neozep Z+',
+      keywords: ['neozep', 'z+', 'phenylephrine'],
+    ),
+    // Medicines - Ibuprofen
+    PackagingTrainedProduct(
+      category: 'Medicine · Ibuprofen',
+      name: 'Advil',
+      keywords: ['advil', 'ibuprofen'],
     ),
     PackagingTrainedProduct(
-      category: 'Medicine',
-      name: 'Neozep',
-      keywords: ['neozep', 'phenylpropanolamine'],
+      category: 'Medicine · Ibuprofen',
+      name: 'Fevral',
+      keywords: ['fevral'],
     ),
     PackagingTrainedProduct(
-      category: 'Medicine',
-      name: 'Ascof Lagundi',
-      keywords: ['lagundi', 'ascof'],
+      category: 'Medicine · Ibuprofen',
+      name: 'Medicol Advance',
+      keywords: ['medicol', 'ibuprofen'],
+    ),
+    // Medicines - Loperamide
+    PackagingTrainedProduct(
+      category: 'Medicine · Loperamide',
+      name: 'Loniper',
+      keywords: ['loniper', 'loperamide'],
     ),
     PackagingTrainedProduct(
-      category: 'Food',
-      name: 'SkyFlakes Crackers',
-      keywords: ['skyflakes', 'cracker'],
+      category: 'Medicine · Loperamide',
+      name: 'Diatabs',
+      keywords: ['diatabs', 'loperamide'],
     ),
     PackagingTrainedProduct(
-      category: 'Food',
-      name: 'Bear Brand Milk',
-      keywords: ['bear brand', 'milk'],
+      category: 'Medicine · Loperamide',
+      name: 'Imodium',
+      keywords: ['imodium', 'loperamide'],
+    ),
+    // Medicines - Antihistamines
+    PackagingTrainedProduct(
+      category: 'Medicine · Antihistamine',
+      name: 'Loratadine',
+      keywords: ['loratadine'],
     ),
     PackagingTrainedProduct(
-      category: 'Food',
-      name: 'Lucky Me Pancit Canton',
-      keywords: ['lucky me', 'pancit canton'],
+      category: 'Medicine · Antihistamine',
+      name: 'Claritin',
+      keywords: ['claritin', 'loratadine'],
     ),
     PackagingTrainedProduct(
-      category: 'Food',
-      name: 'Oreo Cookies',
-      keywords: ['oreo', 'cookie'],
+      category: 'Medicine · Antihistamine',
+      name: 'Cetirizine',
+      keywords: ['cetirizine'],
     ),
     PackagingTrainedProduct(
-      category: 'Food',
-      name: 'Milo Powder Drink',
-      keywords: ['milo', 'powder'],
+      category: 'Medicine · Antihistamine',
+      name: 'RiteMED Cetirizine',
+      keywords: ['ritemed cetirizine', 'ritemed'],
     ),
     PackagingTrainedProduct(
-      category: 'Supplement',
-      name: 'Myra E',
-      keywords: ['myra e', 'tocopheryl'],
+      category: 'Medicine · Antihistamine',
+      name: 'Ceticit Cetirizine',
+      keywords: ['ceticit', 'cetirizine'],
+    ),
+    // Medicines - Cough / Cold preparations
+    PackagingTrainedProduct(
+      category: 'Medicine · Cough/Cold',
+      name: 'Robitussin (Dextromethorphan + Guaifenesin)',
+      keywords: ['robitussin', 'dextromethorphan', 'guaifenesin'],
     ),
     PackagingTrainedProduct(
-      category: 'Supplement',
-      name: 'Enervon',
-      keywords: ['enervon'],
+      category: 'Medicine · Cough/Cold',
+      name: 'Tuseran Night',
+      keywords: ['tuseran night', 'tuseran'],
     ),
     PackagingTrainedProduct(
-      category: 'Supplement',
-      name: 'Centrum Advance',
-      keywords: ['centrum'],
-    ),
-    PackagingTrainedProduct(
-      category: 'Supplement',
-      name: 'Fern-C',
-      keywords: ['fern-c', 'ascorbic'],
-    ),
-    PackagingTrainedProduct(
-      category: 'Supplement',
-      name: 'Potencee',
-      keywords: ['potencee'],
-    ),
-    PackagingTrainedProduct(
-      category: 'Cosmetic',
-      name: "Pond's Facial Wash",
-      keywords: ['ponds', 'facial wash'],
-    ),
-    PackagingTrainedProduct(
-      category: 'Cosmetic',
-      name: 'Olay Skin Cream',
-      keywords: ['olay', 'skin cream'],
-    ),
-    PackagingTrainedProduct(
-      category: 'Cosmetic',
-      name: 'Nivea Sun Protect',
-      keywords: ['nivea', 'sunblock', 'sun protect'],
-    ),
-    PackagingTrainedProduct(
-      category: 'Cosmetic',
-      name: 'Belo Kojic Soap',
-      keywords: ['belo', 'kojic'],
-    ),
-    PackagingTrainedProduct(
-      category: 'Cosmetic',
-      name: 'Celeteque Hydration',
-      keywords: ['celeteque', 'hydration'],
+      category: 'Medicine · Cough/Cold',
+      name: 'Vicks Formula 44',
+      keywords: ['vicks formula 44', 'formula 44', 'vicks 44'],
     ),
   ];
 
@@ -165,4 +272,3 @@ class PackagingCoverage {
         .trim();
   }
 }
-
