@@ -15,6 +15,7 @@ import 'package:basta_fda/services/image_classifier.dart';
 import 'package:basta_fda/services/settings_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:basta_fda/data/packaging_trained_products.dart';
+import 'package:image/image.dart' as img;
 
 class ScannerScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
@@ -61,6 +62,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
   double _baseZoomForScale = 1.0;
   final PackagingImageClassifier _imageClassifier =
       PackagingImageClassifier.instance;
+  static const double _minBrightness = 0.18; // 0..1
+  static const double _minSharpness = 18.0; // variance threshold
   String? _lastCapturedImagePath;
   String? _packagingImagePath;
   String? _regImagePath;
@@ -453,6 +456,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
       final XFile file = await _controller!.takePicture();
       _lastCapturedImagePath = file.path;
+      final qualityOk = await _isImageUsable(file.path);
+      if (!qualityOk) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Image looked too dark or blurry. Try again.'),
+            ),
+          );
+        }
+        return false;
+      }
       setState(() {
         _packagingImagePath = file.path;
         _wideShotCaptured = true;
@@ -471,6 +485,47 @@ class _ScannerScreenState extends State<ScannerScreen> {
           await _controller!.unlockCaptureOrientation();
         } catch (_) {}
       }
+    }
+  }
+
+  Future<bool> _isImageUsable(String path) async {
+    try {
+      final bytes = await File(path).readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return true; // fallback to allow
+      final gray = img.grayscale(decoded);
+      double sum = 0;
+      for (final p in gray) {
+        sum += img.getLuminance(p) / 255.0;
+      }
+      final mean = sum / gray.length;
+      if (mean < _minBrightness) return false;
+
+      // Simple sharpness via Laplacian variance (sampled every 4px)
+      double lapSum = 0;
+      double lapSqSum = 0;
+      int count = 0;
+      final w = gray.width;
+      final h = gray.height;
+      for (int y = 1; y < h - 1; y += 4) {
+        for (int x = 1; x < w - 1; x += 4) {
+          final center = img.getLuminance(gray.getPixel(x, y)).toDouble();
+          final lap = 4 * center -
+              img.getLuminance(gray.getPixel(x - 1, y)).toDouble() -
+              img.getLuminance(gray.getPixel(x + 1, y)).toDouble() -
+              img.getLuminance(gray.getPixel(x, y - 1)).toDouble() -
+              img.getLuminance(gray.getPixel(x, y + 1)).toDouble();
+          lapSum += lap;
+          lapSqSum += lap * lap;
+          count++;
+        }
+      }
+      if (count == 0) return true;
+      final meanLap = lapSum / count;
+      final variance = (lapSqSum / count) - (meanLap * meanLap);
+      return variance >= _minSharpness;
+    } catch (_) {
+      return true;
     }
   }
 
