@@ -88,6 +88,8 @@ flutter:
     - assets/logo.png
     - assets/model_unquant.tflite
     - assets/labels.txt
+    - test_assets/packaging_eval/
+    - test_assets/packaging_eval.csv
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
 

@@ -34,6 +34,7 @@ class ScannerScreen extends StatefulWidget {
 }
 
 enum _CaptureStep { packaging, regNumber }
+enum _ImageQuality { ok, borderline, fail }
 
 class _ScannerScreenState extends State<ScannerScreen> {
   CameraController? _controller;
@@ -62,8 +63,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
   double _baseZoomForScale = 1.0;
   final PackagingImageClassifier _imageClassifier =
       PackagingImageClassifier.instance;
-  static const double _minBrightness = 0.18; // 0..1
-  static const double _minSharpness = 18.0; // variance threshold
+  static const double _minBrightness = 0.14; // relaxed brightness 0..1
+  static const double _borderlineBrightness = 0.10;
+  static const double _minSharpness = 10.0; // relaxed variance threshold
+  static const double _borderlineSharpness = 6.5;
   String? _lastCapturedImagePath;
   String? _packagingImagePath;
   String? _regImagePath;
@@ -456,8 +459,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
       final XFile file = await _controller!.takePicture();
       _lastCapturedImagePath = file.path;
-      final qualityOk = await _isImageUsable(file.path);
-      if (!qualityOk) {
+      final quality = await _evaluateImageQuality(file.path);
+      if (quality == _ImageQuality.fail) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -466,6 +469,16 @@ class _ScannerScreenState extends State<ScannerScreen> {
           );
         }
         return false;
+      }
+      if (quality == _ImageQuality.borderline && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Capture saved but looked a bit dark/blurry. Turn on flash if OCR misses text.',
+            ),
+            duration: Duration(seconds: 2),
+          ),
+        );
       }
       setState(() {
         _packagingImagePath = file.path;
@@ -488,18 +501,19 @@ class _ScannerScreenState extends State<ScannerScreen> {
     }
   }
 
-  Future<bool> _isImageUsable(String path) async {
+  Future<_ImageQuality> _evaluateImageQuality(String path) async {
     try {
       final bytes = await File(path).readAsBytes();
       final decoded = img.decodeImage(bytes);
-      if (decoded == null) return true; // fallback to allow
+      if (decoded == null) return _ImageQuality.ok; // fallback to allow
       final gray = img.grayscale(decoded);
       double sum = 0;
       for (final p in gray) {
         sum += img.getLuminance(p) / 255.0;
       }
       final mean = sum / gray.length;
-      if (mean < _minBrightness) return false;
+      final bool brightEnough = mean >= _minBrightness;
+      final bool brightBorderline = mean >= _borderlineBrightness;
 
       // Simple sharpness via Laplacian variance (sampled every 4px)
       double lapSum = 0;
@@ -520,12 +534,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
           count++;
         }
       }
-      if (count == 0) return true;
+      if (count == 0) return _ImageQuality.ok;
       final meanLap = lapSum / count;
       final variance = (lapSqSum / count) - (meanLap * meanLap);
-      return variance >= _minSharpness;
+      final bool sharpEnough = variance >= _minSharpness;
+      final bool sharpBorderline = variance >= _borderlineSharpness;
+
+      if (brightEnough && sharpEnough) return _ImageQuality.ok;
+      if (brightBorderline && sharpBorderline) return _ImageQuality.borderline;
+      return _ImageQuality.fail;
     } catch (_) {
-      return true;
+      return _ImageQuality.ok;
     }
   }
 
