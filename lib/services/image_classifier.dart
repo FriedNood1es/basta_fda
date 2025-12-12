@@ -46,11 +46,12 @@ class ImagePrediction {
 
 class PackagingImageClassifier {
   PackagingImageClassifier._();
-  static final PackagingImageClassifier instance =
-      PackagingImageClassifier._();
+  static final PackagingImageClassifier instance = PackagingImageClassifier._();
 
   Interpreter? _interpreter;
   List<String>? _labels;
+  String? _loadedModelAsset;
+  int _outputClassCount = 0;
   int _inputHeight = 224;
   int _inputWidth = 224;
   int _inputChannels = 3;
@@ -70,11 +71,46 @@ class PackagingImageClassifier {
 
   Future<void> _loadResources() async {
     try {
-      try {
-        _interpreter =
-            await Interpreter.fromAsset('assets/model_unquant.tflite');
-      } on Exception {
-        _interpreter = await Interpreter.fromAsset('model_unquant.tflite');
+      final modelCandidates = [
+        'assets/food_model.tflite',
+        'assets/model_unquant.tflite',
+        'model_unquant.tflite',
+      ];
+      Interpreter? interpreter;
+      String? loadedAsset;
+      final errors = <Object>[];
+      for (final asset in modelCandidates) {
+        try {
+          interpreter = await Interpreter.fromAsset(asset);
+          loadedAsset = asset;
+          debugPrint('Loaded packaging model: $asset');
+          break;
+        } catch (e, stack) {
+          errors.add(e);
+          debugPrint('Failed to load packaging model $asset: $e');
+          final opHint = _describeUnsupportedOp(e);
+          if (asset.contains('food_model') && opHint != null) {
+            debugPrint(
+              'food_model.tflite requires a newer TensorFlow Lite runtime ($opHint). Falling back.',
+            );
+          }
+          debugPrint('$stack');
+        }
+      }
+      if (interpreter == null || loadedAsset == null) {
+        throw (errors.isNotEmpty
+            ? errors.last
+            : Exception('Unable to load packaging model asset'));
+      }
+      _interpreter = interpreter;
+      _loadedModelAsset = loadedAsset;
+      if (!loadedAsset.contains('food_model')) {
+        final reason = errors.isNotEmpty
+            ? errors.last.toString()
+            : 'unknown error';
+        debugPrint(
+          'Packaging classifier fell back to legacy model_unquant ($reason).',
+        );
       }
       final inputTensor = _interpreter!.getInputTensor(0);
       final shape = inputTensor.shape;
@@ -83,15 +119,23 @@ class PackagingImageClassifier {
         _inputWidth = shape[2];
         _inputChannels = shape[3];
       }
+      final outputTensor = _interpreter!.getOutputTensor(0);
+      final outputShape = outputTensor.shape;
+      if (outputShape.isNotEmpty) {
+        _outputClassCount = outputShape.last;
+      } else if (_labels != null && _labels!.isNotEmpty) {
+        _outputClassCount = _labels!.length;
+      }
       final rawLabels = await rootBundle.loadString('assets/labels.txt');
       _labels = rawLabels
           .split('\n')
           .map((line) => line.trim())
           .where((line) => line.isNotEmpty)
           .map((line) {
-        final parts = line.split(RegExp(r'\s+'));
-        return parts.length > 1 ? parts.sublist(1).join(' ') : parts.first;
-      }).toList();
+            final parts = line.split(RegExp(r'\s+'));
+            return parts.length > 1 ? parts.sublist(1).join(' ') : parts.first;
+          })
+          .toList();
     } catch (e, stack) {
       debugPrint('Failed to load image classifier: $e');
       debugPrint('$stack');
@@ -109,7 +153,18 @@ class PackagingImageClassifier {
 
     await _ensureLoaded();
 
-    if (_interpreter == null || _labels == null || imagePath == null) {
+    if (_loadedModelAsset != null && imagePath != null) {
+      debugPrint('Packaging scan using model: $_loadedModelAsset');
+    }
+
+    if (_interpreter == null || imagePath == null) {
+      return _classifyFromText(normalized);
+    }
+
+    final classCount = _outputClassCount > 0
+        ? _outputClassCount
+        : (_labels?.length ?? 0);
+    if (classCount <= 0) {
       return _classifyFromText(normalized);
     }
 
@@ -124,11 +179,14 @@ class PackagingImageClassifier {
         return _classifyFromText(normalized);
       }
       final input = _convertToInput(decoded);
-      final output =
-          List.generate(1, (_) => List<double>.filled(_labels!.length, 0));
+      final output = List.generate(
+        1,
+        (_) => List<double>.filled(classCount, 0),
+      );
 
       _interpreter!.run(input, output);
       final scores = output.first;
+      debugPrint('Packaging logits: ' + scores.toString());
       final bestIndex = _argMax(scores);
       if (bestIndex < 0) {
         return _classifyFromText(normalized);
@@ -138,36 +196,24 @@ class PackagingImageClassifier {
         return _classifyFromText(normalized);
       }
 
-      double authenticScore = 0;
-      double suspiciousScore = 0;
-      for (var i = 0; i < scores.length && i < _labels!.length; i++) {
-        final label = _parseLabel(_labels![i]);
-        final value = scores[i].isNaN ? 0.0 : scores[i];
-        if (label.isSuspicious) {
-          suspiciousScore += value;
-        } else {
-          authenticScore += value;
-        }
-      }
-      final sum = authenticScore + suspiciousScore;
-      if (sum > 0) {
-        authenticScore /= sum;
-        suspiciousScore /= sum;
-      }
-
-      final labelInfo = _parseLabel(_labels![bestIndex]);
-      final verdictText = labelInfo.isSuspicious
-          ? 'Suspicious ${labelInfo.category.toLowerCase()} packaging'
-          : 'Authentic ${labelInfo.category.toLowerCase()} packaging';
+      final labelInfo = _labelInfoForIndex(bestIndex);
+      final authenticity = confidence.clamp(0.0, 1.0).toDouble();
+      final suspicious = (1 - authenticity).clamp(0.0, 1.0).toDouble();
+      final productName = labelInfo.category;
+      final matchPercent = (authenticity * 100).toStringAsFixed(1);
+      final verdictText = '$productName ($matchPercent% match)';
+      final verdictValue = suspicious > authenticity
+          ? 'suspicious'
+          : 'authentic';
 
       return ImagePrediction(
-        category: labelInfo.category,
-        productName: verdictText,
+        category: productName,
+        productName: productName,
         confidence: confidence,
         source: 'tflite',
-        verdict: labelInfo.isSuspicious ? 'suspicious' : 'authentic',
-        authenticScore: authenticScore.clamp(0.0, 1.0).toDouble(),
-        suspiciousScore: suspiciousScore.clamp(0.0, 1.0).toDouble(),
+        verdict: verdictValue,
+        authenticScore: authenticity,
+        suspiciousScore: suspicious,
       );
     } catch (e, stack) {
       debugPrint('Image classification error: $e');
@@ -186,24 +232,21 @@ class PackagingImageClassifier {
     return [
       List.generate(
         _inputHeight,
-        (y) => List.generate(
-          _inputWidth,
-          (x) {
-            final pixel = resized.getPixel(x, y);
-            final r = pixel.rNormalized.toDouble();
-            final g = pixel.gNormalized.toDouble();
-            final b = pixel.bNormalized.toDouble();
-            if (_inputChannels <= 1) {
-              final gray = (r + g + b) / 3;
-              return [gray];
-            }
-            final values = [r, g, b];
-            if (_inputChannels >= values.length) {
-              return values;
-            }
-            return values.sublist(0, _inputChannels);
-          },
-        ),
+        (y) => List.generate(_inputWidth, (x) {
+          final pixel = resized.getPixel(x, y);
+          final r = pixel.rNormalized.toDouble();
+          final g = pixel.gNormalized.toDouble();
+          final b = pixel.bNormalized.toDouble();
+          if (_inputChannels <= 1) {
+            final gray = (r + g + b) / 3;
+            return [gray];
+          }
+          final values = [r, g, b];
+          if (_inputChannels >= values.length) {
+            return values;
+          }
+          return values.sublist(0, _inputChannels);
+        }),
       ),
     ];
   }
@@ -289,18 +332,55 @@ class PackagingImageClassifier {
 
   _LabelInfo _parseLabel(String raw) {
     final clean = raw.trim();
-    final parts = clean.split(RegExp(r'[_\s]+'));
-    final category = parts.isNotEmpty ? parts.first : 'unknown';
-    final status = parts.length > 1 ? parts.last : 'authentic';
-    return _LabelInfo(
-      category: _titleCase(category),
-      status: status.toLowerCase(),
-    );
+    if (clean.isEmpty) {
+      return const _LabelInfo(category: 'Unknown', status: 'authentic');
+    }
+    final tokens = clean
+        .split(RegExp(r'[_\s]+'))
+        .where((token) => token.isNotEmpty)
+        .toList();
+    var status = 'authentic';
+    if (tokens.isNotEmpty) {
+      final last = tokens.last.toLowerCase();
+      if (last == 'authentic' || last == 'suspicious') {
+        status = last;
+        tokens.removeLast();
+      }
+    }
+    final categoryTokens = tokens.isEmpty ? [clean] : tokens;
+    final category = _titleCase(categoryTokens.join(' '));
+    return _LabelInfo(category: category, status: status);
+  }
+
+  _LabelInfo _labelInfoForIndex(int index) {
+    if (_labels != null && index >= 0 && index < _labels!.length) {
+      return _parseLabel(_labels![index]);
+    }
+    final category = _outputClassCount > 0 ? 'Class ${index + 1}' : 'Unknown';
+    return _LabelInfo(category: category, status: 'authentic');
   }
 
   String _titleCase(String input) {
     if (input.isEmpty) return input;
-    return input[0].toUpperCase() + input.substring(1).toLowerCase();
+    final words = input.split(' ');
+    return words
+        .map((word) {
+          if (word.isEmpty) return word;
+          if (word.length == 1) {
+            return word.toUpperCase();
+          }
+          return word[0].toUpperCase() + word.substring(1).toLowerCase();
+        })
+        .join(' ');
+  }
+
+  String? _describeUnsupportedOp(Object error) {
+    final message = error.toString().toLowerCase();
+    if (message.contains('fully_connected') &&
+        message.contains("version '12'")) {
+      return 'FULLY_CONNECTED v12';
+    }
+    return null;
   }
 }
 

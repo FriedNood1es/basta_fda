@@ -44,7 +44,7 @@ dependencies:
   share_plus: ^10.0.2
   image_picker: ^1.1.1
   image: ^4.1.7
-  tflite_flutter: ^0.10.4
+  tflite_flutter: ^0.12.1
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -60,10 +60,6 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
-
-dependency_overrides:
-  tflite_flutter:
-    path: third_party/tflite_flutter
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -87,6 +83,7 @@ flutter:
     - assets/cosmetic_product_notification.csv
     - assets/logo.png
     - assets/model_unquant.tflite
+    - assets/food_model.tflite
     - assets/labels.txt
     - test_assets/packaging_eval/
     - test_assets/packaging_eval.csv

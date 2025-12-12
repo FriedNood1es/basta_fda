@@ -34,6 +34,7 @@ class ScannerScreen extends StatefulWidget {
 }
 
 enum _CaptureStep { packaging, regNumber }
+
 enum _ImageQuality { ok, borderline, fail }
 
 class _ScannerScreenState extends State<ScannerScreen> {
@@ -67,7 +68,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
   static const double _borderlineBrightness = 0.10;
   static const double _minSharpness = 10.0; // relaxed variance threshold
   static const double _borderlineSharpness = 6.5;
-  String? _lastCapturedImagePath;
   String? _packagingImagePath;
   String? _regImagePath;
   String? _confirmedRegNumber;
@@ -81,8 +81,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   bool get _hasCompletedPackaging =>
       _packageCaptureSkipped || _wideShotCaptured;
 
-  bool get _hasCompletedRegStep =>
-      _regCaptureSkipped || _regShotCaptured;
+  bool get _hasCompletedRegStep => _regCaptureSkipped || _regShotCaptured;
 
   bool get _canConfirmFlow =>
       widget.fdaChecker.isLoaded &&
@@ -132,26 +131,26 @@ class _ScannerScreenState extends State<ScannerScreen> {
         builder: (ctx) {
           final theme = Theme.of(ctx);
           return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton.icon(
-                    icon: const Icon(Icons.help_outline_rounded, size: 18),
-                    label: const Text('How to scan'),
-                    onPressed: () {
-                      Navigator.of(ctx).pop();
-                      setState(() => _showCaptureGuide = true);
-                    },
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.help_outline_rounded, size: 18),
+                      label: const Text('How to scan'),
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        setState(() => _showCaptureGuide = true);
+                      },
+                    ),
                   ),
-                ),
-                Row(
-                  children: [
-                    Icon(
+                  Row(
+                    children: [
+                      Icon(
                         Icons.info_outline_rounded,
                         color: theme.colorScheme.primary,
                       ),
@@ -197,7 +196,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _regCaptureSkipped = false;
       _pendingRegCapture = false;
       _activeCaptureStep = _CaptureStep.packaging;
-      _lastCapturedImagePath = null;
       _packagingImagePath = null;
       _regImagePath = null;
       _regSelectionPending = false;
@@ -213,9 +211,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   Future<void> _handleScanResultReturn(Object? result) async {
     if (!mounted || result != ScanResultScreen.viewHistoryResult) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const HistoryScreen()),
-    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const HistoryScreen()));
   }
 
   Future<void> _refreshFdaData() async {
@@ -227,7 +225,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
       barrierDismissible: false,
       builder: (ctx) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -253,7 +253,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
       if (mounted) setState(() => _updatingFda = false);
     }
   }
-
 
   Future<void> _initCamera() async {
     _controller = CameraController(
@@ -389,7 +388,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
       } catch (_) {}
 
       final XFile file = await _controller!.takePicture();
-      _lastCapturedImagePath = file.path;
       final inputImage = InputImage.fromFilePath(file.path);
       final RecognizedText result = await _textRecognizer.processImage(
         inputImage,
@@ -398,7 +396,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _lastRawText = rawText;
       final scannedText = _composeTextFromResult(result);
 
-      debugPrint('[OCR] raw (${rawText.length} chars): ${rawText.replaceAll('\n', ' ')}');
+      debugPrint(
+        '[OCR] raw (${rawText.length} chars): ${rawText.replaceAll('\n', ' ')}',
+      );
       debugPrint('[OCR] cleaned (${scannedText.length} chars): $scannedText');
 
       if (!mounted) return scannedText;
@@ -433,7 +433,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     }
   }
 
-
   Future<bool> _capturePackagingPhoto() async {
     if (!mounted || _controller == null || !_controller!.value.isInitialized) {
       return false;
@@ -458,7 +457,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
       } catch (_) {}
 
       final XFile file = await _controller!.takePicture();
-      _lastCapturedImagePath = file.path;
       final quality = await _evaluateImageQuality(file.path);
       if (quality == _ImageQuality.fail) {
         if (mounted) {
@@ -524,7 +522,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
       for (int y = 1; y < h - 1; y += 4) {
         for (int x = 1; x < w - 1; x += 4) {
           final center = img.getLuminance(gray.getPixel(x, y)).toDouble();
-          final lap = 4 * center -
+          final lap =
+              4 * center -
               img.getLuminance(gray.getPixel(x - 1, y)).toDouble() -
               img.getLuminance(gray.getPixel(x + 1, y)).toDouble() -
               img.getLuminance(gray.getPixel(x, y - 1)).toDouble() -
@@ -577,9 +576,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     if (!mounted) return;
     if (result == null || result.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Reg capture looked unclear. Try again.'),
-        ),
+        const SnackBar(content: Text('Reg capture looked unclear. Try again.')),
       );
       _pendingRegCapture = true;
       return;
@@ -774,21 +771,34 @@ class _ScannerScreenState extends State<ScannerScreen> {
             .classify(
               rawText: rawText,
               additionalText: text,
-              imagePath: _lastCapturedImagePath,
+              imagePath: _packagingImagePath,
             )
             .then((prediction) {
-          if (prediction == null) {
-            return const ImageCheckResult(
-              status: ImageCheckStatus.unrecognized,
-            );
-          }
-          return ImageCheckResult(
-            status: ImageCheckStatus.recognized,
-            info: prediction.toMap(),
-          );
-        }).catchError(
-          (_) => const ImageCheckResult(status: ImageCheckStatus.failed),
-        );
+              if (prediction == null) {
+                debugPrint('Packaging helper: no prediction');
+                return const ImageCheckResult(
+                  status: ImageCheckStatus.unrecognized,
+                );
+              }
+              final info = prediction.toMap();
+              final productName = info['product'] ?? 'unknown';
+              final confidenceText = info['confidence'] ?? '?';
+              debugPrint(
+                'Packaging helper result: ' +
+                    productName +
+                    ' (confidence ' +
+                    confidenceText +
+                    ')',
+              );
+              return ImageCheckResult(
+                status: ImageCheckStatus.recognized,
+                info: info,
+              );
+            })
+            .catchError((error) {
+              debugPrint('Packaging helper failed: ' + error.toString());
+              return const ImageCheckResult(status: ImageCheckStatus.failed);
+            });
       } catch (_) {
         return Future.value(
           const ImageCheckResult(status: ImageCheckStatus.failed),
@@ -815,17 +825,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
       final byReg = widget.fdaChecker.findByRegNo(raw);
       final regLike =
           RegExp(r'\b[A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?\b').hasMatch(raw) ||
-              RegExp(
-                r'\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*[A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?\b',
-                caseSensitive: false,
-              ).hasMatch(raw);
+          RegExp(
+            r'\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*[A-Za-z]{2,4}-\d{3,6}(?:-\d{2,4})?\b',
+            caseSensitive: false,
+          ).hasMatch(raw);
 
       Map<String, String>? matchedProduct;
       if (byReg != null) {
         matchedProduct = byReg;
       } else if (!regLike) {
-        matchedProduct =
-            await widget.fdaChecker.findProductDetailsWithExplainAsync(text);
+        matchedProduct = await widget.fdaChecker
+            .findProductDetailsWithExplainAsync(text);
       }
 
       if (!mounted) return;
@@ -837,23 +847,29 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
       if (matchedProduct != null) {
         nonNullProduct = Map<String, String>.from(matchedProduct);
-        isImageTrainedProduct =
-            PackagingCoverage.matchesProduct(nonNullProduct);
+        isImageTrainedProduct = PackagingCoverage.matchesProduct(
+          nonNullProduct,
+        );
 
         if (skipImageCheck) {
           imageResultFuture = Future.value(
-              const ImageCheckResult(status: ImageCheckStatus.skipped));
-          initialImageResult =
-              const ImageCheckResult(status: ImageCheckStatus.skipped);
+            const ImageCheckResult(status: ImageCheckStatus.skipped),
+          );
+          initialImageResult = const ImageCheckResult(
+            status: ImageCheckStatus.skipped,
+          );
         } else if (!isImageTrainedProduct) {
           imageResultFuture = Future.value(
-              const ImageCheckResult(status: ImageCheckStatus.unrecognized));
-          initialImageResult =
-              const ImageCheckResult(status: ImageCheckStatus.unrecognized);
+            const ImageCheckResult(status: ImageCheckStatus.unrecognized),
+          );
+          initialImageResult = const ImageCheckResult(
+            status: ImageCheckStatus.unrecognized,
+          );
         } else {
           imageResultFuture = resolveImageCheck(raw);
-          initialImageResult =
-              const ImageCheckResult(status: ImageCheckStatus.pending);
+          initialImageResult = const ImageCheckResult(
+            status: ImageCheckStatus.pending,
+          );
         }
 
         final eval = widget.fdaChecker.evaluateScan(
@@ -881,10 +897,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
               return AlertDialog(
                 title: Row(
                   children: const [
-                    Icon(
-                      Icons.warning_amber_rounded,
-                      color: Colors.redAccent,
-                    ),
+                    Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
                     SizedBox(width: 8),
                     Text('ALERT'),
                   ],
@@ -958,13 +971,16 @@ class _ScannerScreenState extends State<ScannerScreen> {
       } else {
         if (skipImageCheck) {
           imageResultFuture = Future.value(
-              const ImageCheckResult(status: ImageCheckStatus.skipped));
-          initialImageResult =
-              const ImageCheckResult(status: ImageCheckStatus.skipped);
+            const ImageCheckResult(status: ImageCheckStatus.skipped),
+          );
+          initialImageResult = const ImageCheckResult(
+            status: ImageCheckStatus.skipped,
+          );
         } else {
           imageResultFuture = resolveImageCheck(raw);
-          initialImageResult =
-              const ImageCheckResult(status: ImageCheckStatus.pending);
+          initialImageResult = const ImageCheckResult(
+            status: ImageCheckStatus.pending,
+          );
         }
 
         if (dialogShown && Navigator.canPop(context)) {
@@ -974,17 +990,22 @@ class _ScannerScreenState extends State<ScannerScreen> {
         }
         final capturedPackagingPath = _packagingImagePath;
         final imageResult = await imageResultFuture;
-        final imageRecognized = imageResult.status == ImageCheckStatus.recognized &&
-            (imageResult.info?['product']?.isNotEmpty ?? false);
+        final imageRecognized =
+            imageResult.status == ImageCheckStatus.recognized;
 
-        if (_regCaptureSkipped && imageRecognized) {
+        if (imageRecognized) {
           final info = imageResult.info ?? {};
-          final productName = info['product'] ?? 'Packaging match';
+          final productName = (info['product']?.trim().isNotEmpty ?? false)
+              ? info['product']!.trim()
+              : 'Packaging match';
           final verdict = info['verdict'];
+          final matchReason = _regCaptureSkipped
+              ? 'Packaging helper recognized this product.'
+              : 'Packaging helper recognized this product, but no FDA record matched the scan.';
           final pseudoProduct = <String, String>{
             'brand_name': productName,
             'generic_name': productName,
-            'match_reason': 'Packaging helper recognized this product.',
+            'match_reason': matchReason,
           };
           if (verdict != null && verdict.isNotEmpty) {
             pseudoProduct['verification_reasons'] =
@@ -1045,7 +1066,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
       }
       _isMatching = false;
     }
-
   }
 
   String cleanText(String input) {
@@ -1102,8 +1122,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.confirmation_number_rounded,
-                            color: theme.colorScheme.primary),
+                        Icon(
+                          Icons.confirmation_number_rounded,
+                          color: theme.colorScheme.primary,
+                        ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
@@ -1172,8 +1194,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
                         const Spacer(),
                         FilledButton(
                           onPressed: () {
-                            final normalized =
-                                _extractRegNumber(controller.text);
+                            final normalized = _extractRegNumber(
+                              controller.text,
+                            );
                             if (normalized == null) {
                               setSheetState(() {
                                 error =
@@ -1209,13 +1232,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Widget build(BuildContext context) {
     if (!widget.cameraEnabled) {
       return Scaffold(
-        appBar: AppBar(
-          centerTitle: true,
-          title: const Text('Scan Product'),
-        ),
-        body: const Center(
-          child: Text('Camera disabled in test mode'),
-        ),
+        appBar: AppBar(centerTitle: true, title: const Text('Scan Product')),
+        body: const Center(child: Text('Camera disabled in test mode')),
       );
     }
 
@@ -1441,10 +1459,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                           children: [
                             Row(
                               children: [
-                                const Icon(
-                                  Icons.camera_alt_rounded,
-                                  size: 26,
-                                ),
+                                const Icon(Icons.camera_alt_rounded, size: 26),
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: Text(
@@ -1452,15 +1467,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
                                     style: Theme.of(context)
                                         .textTheme
                                         .titleMedium
-                                        ?.copyWith(
-                                          fontWeight: FontWeight.w700,
-                                        ),
+                                        ?.copyWith(fontWeight: FontWeight.w700),
                                   ),
                                 ),
                                 IconButton(
-                                  onPressed: () => setState(
-                                    () => _showCaptureGuide = false,
-                                  ),
+                                  onPressed: () =>
+                                      setState(() => _showCaptureGuide = false),
                                   icon: const Icon(Icons.close_rounded),
                                 ),
                               ],
@@ -1497,9 +1509,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
                             SizedBox(
                               width: double.infinity,
                               child: FilledButton(
-                                onPressed: () => setState(
-                                  () => _showCaptureGuide = false,
-                                ),
+                                onPressed: () =>
+                                    setState(() => _showCaptureGuide = false),
                                 child: const Text('Got it'),
                               ),
                             ),
@@ -1520,17 +1531,20 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final theme = Theme.of(context);
     final bool isPackaging = _activeCaptureStep == _CaptureStep.packaging;
     final bool captured = isPackaging ? _wideShotCaptured : _regShotCaptured;
-    final bool skipped =
-        isPackaging ? _packageCaptureSkipped : _regCaptureSkipped;
+    final bool skipped = isPackaging
+        ? _packageCaptureSkipped
+        : _regCaptureSkipped;
     final bool disabled = _isCapturing || _isMatching;
     final bool isConfirmStage = _canConfirmFlow;
     final bool confirmEnabled = isConfirmStage && !disabled;
     final Color textColor = Colors.white;
     final Color muted = Colors.white70;
 
-    final IconData captureIcon =
-        isPackaging ? Icons.camera_alt_rounded : Icons.document_scanner_rounded;
-    final bool confirmMode = isConfirmStage &&
+    final IconData captureIcon = isPackaging
+        ? Icons.camera_alt_rounded
+        : Icons.document_scanner_rounded;
+    final bool confirmMode =
+        isConfirmStage &&
         _activeCaptureStep == _CaptureStep.regNumber &&
         (_regShotCaptured || _regCaptureSkipped) &&
         !_pendingRegCapture;
@@ -1540,24 +1554,25 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final String mainLabel = confirmMode
         ? (_isMatching ? 'Matching...' : 'Confirm scan')
         : (captured
-            ? (isPackaging ? 'Retake packaging' : 'Retake reg number')
-            : (isPackaging ? 'Capture packaging' : 'Capture reg number'));
+              ? (isPackaging ? 'Retake packaging' : 'Retake reg number')
+              : (isPackaging ? 'Capture packaging' : 'Capture reg number'));
     final VoidCallback? mainAction = confirmMode
         ? (confirmEnabled ? _confirmScan : null)
         : (disabled
-            ? null
-            : (isPackaging ? _startPackagingCapture : _startRegCapture));
+              ? null
+              : (isPackaging ? _startPackagingCapture : _startRegCapture));
 
-    final IconData skipIcon =
-        skipped ? Icons.undo_rounded : Icons.visibility_off_rounded;
+    final IconData skipIcon = skipped
+        ? Icons.undo_rounded
+        : Icons.visibility_off_rounded;
     final String skipLabel = skipped
         ? (isPackaging ? 'Use packaging capture' : 'Add reg capture')
         : (isPackaging ? 'Skip packaging' : 'Skip reg capture');
     final VoidCallback? skipAction = disabled
         ? null
         : (isPackaging
-            ? (skipped ? _resumePackagingCapture : _skipPackagingCapture)
-            : (skipped ? _resumeRegCapture : _skipRegCapture));
+              ? (skipped ? _resumePackagingCapture : _skipPackagingCapture)
+              : (skipped ? _resumeRegCapture : _skipRegCapture));
 
     final VoidCallback? stepToggle = disabled
         ? null
@@ -1581,10 +1596,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final String statusText = confirmMode
         ? (_isMatching ? 'Matching in progress' : 'Ready to submit')
         : (skipped
-            ? (isPackaging
-                ? 'Skipped (uses packaging photo only)'
-                : 'Skipped (uses packaging text)')
-            : (captured ? 'Capture saved' : 'Ready to capture'));
+              ? (isPackaging
+                    ? 'Skipped (uses packaging photo only)'
+                    : 'Skipped (uses packaging text)')
+              : (captured ? 'Capture saved' : 'Ready to capture'));
 
     return SafeArea(
       minimum: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -1672,8 +1687,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     child: Icon(
                       mainIcon,
                       size: 28,
-                      color:
-                          isConfirmStage ? Colors.green : theme.primaryColor,
+                      color: isConfirmStage ? Colors.green : theme.primaryColor,
                     ),
                   ),
                 ),
@@ -1709,7 +1723,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     );
   }
 }
-
 
 class _GuideStep extends StatelessWidget {
   final String number;
@@ -1751,10 +1764,7 @@ class _GuideStep extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 4),
-              Text(
-                body,
-                style: theme.textTheme.bodySmall,
-              ),
+              Text(body, style: theme.textTheme.bodySmall),
             ],
           ),
         ),
@@ -1844,10 +1854,7 @@ class _RegNumberChip extends StatelessWidget {
   final String regNumber;
   final VoidCallback onCopy;
 
-  const _RegNumberChip({
-    required this.regNumber,
-    required this.onCopy,
-  });
+  const _RegNumberChip({required this.regNumber, required this.onCopy});
 
   @override
   Widget build(BuildContext context) {
@@ -1861,8 +1868,11 @@ class _RegNumberChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.confirmation_number_rounded,
-              size: 16, color: Colors.white),
+          const Icon(
+            Icons.confirmation_number_rounded,
+            size: 16,
+            color: Colors.white,
+          ),
           const SizedBox(width: 6),
           Text(
             regNumber.toUpperCase(),
@@ -1910,17 +1920,12 @@ class _CapturePreviewButton extends StatelessWidget {
               insetPadding: const EdgeInsets.all(20),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: Image.file(
-                  File(path),
-                  fit: BoxFit.cover,
-                ),
+                child: Image.file(File(path), fit: BoxFit.cover),
               ),
             ),
           );
         },
-        style: TextButton.styleFrom(
-          foregroundColor: Colors.white70,
-        ),
+        style: TextButton.styleFrom(foregroundColor: Colors.white70),
         icon: Icon(icon, size: 18),
         label: Text(label),
       ),
@@ -2005,7 +2010,3 @@ class _CaptureSummaryPill extends StatelessWidget {
     );
   }
 }
-
-
-
-

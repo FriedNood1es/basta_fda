@@ -54,13 +54,15 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
   void initState() {
     super.initState();
     _imageResult = widget.initialImageResult;
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _maybeShowSuspiciousAlert());
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _maybeShowSuspiciousAlert(),
+    );
     widget.imageResultFuture?.then((result) {
       if (!mounted || result == _imageResult) return;
       setState(() => _imageResult = result);
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) => _maybeShowSuspiciousAlert());
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _maybeShowSuspiciousAlert(),
+      );
     });
   }
 
@@ -77,18 +79,18 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     }
 
     double authentic = parseScore('authenticScore');
-    double suspicious = parseScore('suspiciousScore');
-    if (authentic <= 0 && suspicious <= 0) return const {};
-    final total = (authentic + suspicious);
-    if (total > 0) {
-      authentic /= total;
-      suspicious /= total;
+    if (authentic <= 0) {
+      authentic = parseScore('confidence');
     }
+    double suspicious = parseScore('suspiciousScore');
+    if (authentic > 0 && suspicious <= 0) {
+      suspicious = (1 - authentic).clamp(0.0, 1.0).toDouble();
+    } else if (suspicious > 0 && authentic <= 0) {
+      authentic = (1 - suspicious).clamp(0.0, 1.0).toDouble();
+    }
+    if (authentic <= 0 && suspicious <= 0) return const {};
     double clamp(double v) => v.clamp(0.0, 1.0).toDouble();
-    return {
-      'authentic': clamp(authentic),
-      'suspicious': clamp(suspicious),
-    };
+    return {'authentic': clamp(authentic), 'suspicious': clamp(suspicious)};
   }
 
   void _maybeShowSuspiciousAlert() {
@@ -110,8 +112,13 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
       builder: (ctx) {
         final theme = Theme.of(ctx);
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 32,
+            vertical: 24,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -126,7 +133,9 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(24),
+                  ),
                 ),
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
                 child: Column(
@@ -134,8 +143,11 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.warning_amber_rounded,
-                            color: Colors.white, size: 28),
+                        const Icon(
+                          Icons.warning_amber_rounded,
+                          color: Colors.white,
+                          size: 28,
+                        ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
@@ -181,7 +193,12 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                   ],
                 ),
               ),
-              const Divider(height: 24, thickness: 1, indent: 20, endIndent: 20),
+              const Divider(
+                height: 24,
+                thickness: 1,
+                indent: 20,
+                endIndent: 20,
+              ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                 child: Column(
@@ -240,9 +257,9 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
   Future<void> _copyRegNumber(String value) async {
     await Clipboard.setData(ClipboardData(text: value));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Registration number copied')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Registration number copied')));
   }
 
   Future<void> _shareScanSummary() async {
@@ -298,7 +315,10 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
       builder: (ctx) {
         final size = MediaQuery.of(ctx).size;
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 24,
+          ),
           backgroundColor: Colors.black,
           child: Stack(
             children: [
@@ -314,10 +334,9 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                     errorBuilder: (context, error, stackTrace) => Center(
                       child: Text(
                         'Unable to load photo',
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.copyWith(color: Colors.white),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodyMedium?.copyWith(color: Colors.white),
                       ),
                     ),
                   ),
@@ -488,19 +507,21 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     final imageVerdict = imageInfo?['verdict'] ?? '';
     final confirmedRegRaw = widget.confirmedRegNumber?.trim();
     final fallbackRegRaw = productInfo['reg_no']?.trim();
-    final copyableRegNumber = (confirmedRegRaw != null && confirmedRegRaw.isNotEmpty)
+    final copyableRegNumber =
+        (confirmedRegRaw != null && confirmedRegRaw.isNotEmpty)
         ? confirmedRegRaw
         : (fallbackRegRaw != null && fallbackRegRaw.isNotEmpty
-            ? fallbackRegRaw
-            : null);
+              ? fallbackRegRaw
+              : null);
     final regNoLabel = copyableRegNumber?.toUpperCase() ?? 'N/A';
     final sColor = statusColor(status, theme);
     final registrationColor =
         widget.registrationStatus == RegistrationStatus.registered
-            ? Colors.green.shade600
-            : theme.colorScheme.error;
-    final imageChipValue =
-        imageVerdict == 'suspicious' ? 'Suspicious' : _imageResult.status.label;
+        ? Colors.green.shade600
+        : theme.colorScheme.error;
+    final imageChipValue = imageVerdict == 'suspicious'
+        ? 'Suspicious'
+        : _imageResult.status.label;
     Color imageColor;
     if (imageVerdict == 'suspicious') {
       imageColor = theme.colorScheme.error;
@@ -831,7 +852,9 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                 child: ListTile(
                   leading: const Icon(Icons.image_search_rounded),
                   title: Text(
-                    imageProduct.isNotEmpty ? imageProduct : 'Image model preview',
+                    imageProduct.isNotEmpty
+                        ? imageProduct
+                        : 'Image model preview',
                     style: theme.textTheme.titleMedium,
                   ),
                   subtitle: Column(
@@ -843,8 +866,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                         Text('Category: ${_titleCase(imageCategory)}'),
                       if (imageConfidence.isNotEmpty)
                         Text('Confidence: $imageConfidence'),
-                      if (imageSource.isNotEmpty)
-                        Text('Source: $imageSource'),
+                      if (imageSource.isNotEmpty) Text('Source: $imageSource'),
                     ],
                   ),
                 ),
@@ -1087,8 +1109,9 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                 ),
                 const SizedBox(height: 8),
                 TextButton.icon(
-                  onPressed: () =>
-                      Navigator.of(context).pop(ScanResultScreen.viewHistoryResult),
+                  onPressed: () => Navigator.of(
+                    context,
+                  ).pop(ScanResultScreen.viewHistoryResult),
                   icon: const Icon(Icons.history_rounded),
                   label: const Text('View scan history'),
                 ),
@@ -1107,10 +1130,7 @@ class _PackagingPreviewCard extends StatelessWidget {
   final String path;
   final VoidCallback onTap;
 
-  const _PackagingPreviewCard({
-    required this.path,
-    required this.onTap,
-  });
+  const _PackagingPreviewCard({required this.path, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -1286,8 +1306,7 @@ class _InfoBanner extends StatelessWidget {
     final theme = Theme.of(context);
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      color:
-          theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
       child: ListTile(
         leading: Icon(icon, color: theme.colorScheme.primary),
         title: Text(
@@ -1337,12 +1356,7 @@ class _AlertBullet extends StatelessWidget {
         children: [
           Icon(icon, color: theme.colorScheme.error),
           const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              text,
-              style: theme.textTheme.bodyMedium,
-            ),
-          ),
+          Expanded(child: Text(text, style: theme.textTheme.bodyMedium)),
         ],
       ),
     );
@@ -1353,10 +1367,7 @@ class _RegNumberChip extends StatelessWidget {
   final String regNumber;
   final VoidCallback onCopy;
 
-  const _RegNumberChip({
-    required this.regNumber,
-    required this.onCopy,
-  });
+  const _RegNumberChip({required this.regNumber, required this.onCopy});
 
   @override
   Widget build(BuildContext context) {
@@ -1373,7 +1384,11 @@ class _RegNumberChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.numbers_rounded, size: 18, color: theme.colorScheme.primary),
+            Icon(
+              Icons.numbers_rounded,
+              size: 18,
+              color: theme.colorScheme.primary,
+            ),
             const SizedBox(width: 8),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1626,7 +1641,9 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
 
   String _buildSummary() {
     final imageSummary =
-        widget.imageInfo?['product'] ?? widget.imageInfo?['verdict'] ?? widget.imageStatus.label;
+        widget.imageInfo?['product'] ??
+        widget.imageInfo?['verdict'] ??
+        widget.imageStatus.label;
     final summary = StringBuffer()
       ..writeln('Suspicious Product Report')
       ..writeln('Admins: ${_adminEmails.join(', ')}')
@@ -1637,7 +1654,9 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
       ..writeln('')
       ..writeln('Brand: ${widget.productInfo['brand_name'] ?? ''}')
       ..writeln('Generic: ${widget.productInfo['generic_name'] ?? ''}')
-      ..writeln('Confirmed Reg No: ${widget.confirmedRegNumber ?? widget.productInfo['reg_no'] ?? ''}')
+      ..writeln(
+        'Confirmed Reg No: ${widget.confirmedRegNumber ?? widget.productInfo['reg_no'] ?? ''}',
+      )
       ..writeln('Registration Status: ${widget.registrationStatus.label}')
       ..writeln('Image Check: $imageSummary')
       ..writeln(
@@ -2099,13 +2118,19 @@ class _ReportProductSheetState extends State<_ReportProductSheet> {
                       const SizedBox(height: 8),
                       OutlinedButton.icon(
                         onPressed: () async {
-                          final subject = Uri.encodeComponent('Suspicious Product Report');
+                          final subject = Uri.encodeComponent(
+                            'Suspicious Product Report',
+                          );
                           final body = Uri.encodeComponent(_buildSummary());
                           final mailto = _adminEmails
                               .map((e) => Uri.encodeComponent(e))
                               .join(',');
-                          final uri = 'mailto:$mailto?subject=$subject&body=$body';
-                          await Share.share(uri, subject: 'Send email to admin');
+                          final uri =
+                              'mailto:$mailto?subject=$subject&body=$body';
+                          await Share.share(
+                            uri,
+                            subject: 'Send email to admin',
+                          );
                         },
                         icon: const Icon(Icons.email_outlined),
                         label: const Text('Email to admin'),

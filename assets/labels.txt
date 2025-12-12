@@ -1,8 +1,5 @@
-0 cosmetic_authentic
-1 cosmetic_suspicious
-2 food_authentic
-3 food_suspicious
-4 medicine_authentic
-5 medicine_suspicious
-6 supplement_authentic
-7 supplement_suspicious
+0 555_tuna_spicy
+1 century_tuna
+2 holiday_corned_beef
+3 lucky_me_pancit_canton_kalamansi
+4 quickchow_beef_noodles
