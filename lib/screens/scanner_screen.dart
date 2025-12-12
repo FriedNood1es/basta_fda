@@ -77,16 +77,20 @@ class _ScannerScreenState extends State<ScannerScreen> {
   bool _regSelectionPending = false;
   String? _pendingRegText;
   String? _pendingRegRaw;
+  PackagingModelCategory? _selectedCategory;
+  bool _showCategorySelector = false;
 
   bool get _hasCompletedPackaging =>
       _packageCaptureSkipped || _wideShotCaptured;
 
   bool get _hasCompletedRegStep => _regCaptureSkipped || _regShotCaptured;
+  bool get _hasSelectedCategory => _selectedCategory != null;
 
   bool get _canConfirmFlow =>
       widget.fdaChecker.isLoaded &&
       _hasCompletedPackaging &&
-      _hasCompletedRegStep;
+      _hasCompletedRegStep &&
+      _hasSelectedCategory;
   @override
   void initState() {
     super.initState();
@@ -654,6 +658,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }
 
   Future<void> _confirmScan() async {
+    if (!_ensureCategorySelected()) return;
     if (!_canConfirmFlow || _isCapturing || _isMatching) return;
     if (!_regCaptureSkipped &&
         (_confirmedRegNumber == null || _pendingRegCapture)) {
@@ -670,6 +675,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Future<void> _matchScannedText() async {
     final wantsReview = SettingsService.instance.reviewBeforeSearch;
     final bool regSkipped = _regCaptureSkipped;
+
+    if (!_ensureCategorySelected()) return;
 
     if (!wantsReview) {
       if (regSkipped) {
@@ -711,6 +718,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     bool capturePhoto = true,
     bool allowImageCheck = true,
   }) async {
+    if (!_ensureCategorySelected()) return;
     if (_regCaptureSkipped) {
       await _executeSearch(
         preset ?? '',
@@ -766,12 +774,20 @@ class _ScannerScreenState extends State<ScannerScreen> {
           const ImageCheckResult(status: ImageCheckStatus.skipped),
         );
       }
+      final category = _selectedCategory;
+      if (category == null) {
+        debugPrint('Packaging helper skipped: category not selected');
+        return Future.value(
+          const ImageCheckResult(status: ImageCheckStatus.failed),
+        );
+      }
       try {
         return _imageClassifier
             .classify(
               rawText: rawText,
               additionalText: text,
               imagePath: _packagingImagePath,
+              category: category,
             )
             .then((prediction) {
               if (prediction == null) {
@@ -1006,6 +1022,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
             'brand_name': productName,
             'generic_name': productName,
             'match_reason': matchReason,
+            'packaging_category': _categoryLabel(_selectedCategory),
           };
           if (verdict != null && verdict.isNotEmpty) {
             pseudoProduct['verification_reasons'] =
@@ -1228,6 +1245,104 @@ class _ScannerScreenState extends State<ScannerScreen> {
     super.dispose();
   }
 
+  Widget _buildCategorySelector() {
+    return Positioned(
+      top: 64,
+      left: 12,
+      right: 12,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: PackagingModelCategory.values.map((category) {
+            final selected = _selectedCategory == category;
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(_categoryLabel(category)),
+                selected: selected,
+                onSelected: (_) {
+                  setState(() {
+                    _selectedCategory = category;
+                  });
+                },
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  String _categoryLabel(PackagingModelCategory? category) {
+    if (category == null) return 'Select category';
+    switch (category) {
+      case PackagingModelCategory.food:
+        return 'Food';
+      case PackagingModelCategory.cosmetics:
+        return 'Cosmetics';
+      case PackagingModelCategory.supplements:
+        return 'Supplements';
+      case PackagingModelCategory.medicine:
+        return 'Medicine';
+    }
+  }
+
+  bool _ensureCategorySelected() {
+    if (_selectedCategory != null) return true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Select a category before scanning.')),
+    );
+    if (!_showCategorySelector) {
+      setState(() => _showCategorySelector = true);
+    }
+    return false;
+  }
+
+  bool get _canUseRegStep => _packageCaptureSkipped || _wideShotCaptured;
+
+  void _selectCaptureStep(_CaptureStep step) {
+    if (_activeCaptureStep == step) return;
+    if (step == _CaptureStep.regNumber && !_canUseRegStep) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Capture packaging before the reg step.')),
+      );
+      return;
+    }
+    setState(() {
+      _activeCaptureStep = step;
+      if (step == _CaptureStep.regNumber) {
+        _pendingRegCapture = !_regShotCaptured;
+      } else {
+        _pendingRegCapture = false;
+      }
+    });
+  }
+
+  Widget _buildStepTabs() {
+    final bool regEnabled = _canUseRegStep;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          ChoiceChip(
+            label: const Text('Packaging'),
+            selected: _activeCaptureStep == _CaptureStep.packaging,
+            onSelected: (_) => _selectCaptureStep(_CaptureStep.packaging),
+          ),
+          const SizedBox(width: 8),
+          ChoiceChip(
+            label: const Text('Reg number'),
+            selected: _activeCaptureStep == _CaptureStep.regNumber,
+            onSelected: regEnabled
+                ? (_) => _selectCaptureStep(_CaptureStep.regNumber)
+                : null,
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!widget.cameraEnabled) {
@@ -1263,6 +1378,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 builder: (_) => SettingsScreen(fdaChecker: widget.fdaChecker),
               ),
             ),
+          ),
+          IconButton(
+            tooltip: _showCategorySelector
+                ? 'Hide categories'
+                : 'Select category',
+            icon: Icon(
+              _showCategorySelector ? Icons.category : Icons.category_outlined,
+            ),
+            onPressed: () {
+              setState(() => _showCategorySelector = !_showCategorySelector);
+            },
           ),
           IconButton(
             tooltip: 'How to scan',
@@ -1394,6 +1520,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 ),
               ),
             ),
+
+          if (_showCategorySelector || !_hasSelectedCategory)
+            _buildCategorySelector(),
 
           // (Multi-shot overlay removed)
           Positioned(
@@ -1529,44 +1658,34 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   Widget _buildCaptureControlsOverlay(BuildContext context) {
     final theme = Theme.of(context);
+    final bool categorySelected = _hasSelectedCategory;
     final bool isPackaging = _activeCaptureStep == _CaptureStep.packaging;
-    final bool captured = isPackaging ? _wideShotCaptured : _regShotCaptured;
+    final bool hasCapture = isPackaging ? _wideShotCaptured : _regShotCaptured;
     final bool skipped = isPackaging
         ? _packageCaptureSkipped
         : _regCaptureSkipped;
-    final bool disabled = _isCapturing || _isMatching;
-    final bool isConfirmStage = _canConfirmFlow;
-    final bool confirmEnabled = isConfirmStage && !disabled;
-    final Color textColor = Colors.white;
-    final Color muted = Colors.white70;
+    final bool disabled = _isCapturing || _isMatching || !categorySelected;
 
     final IconData captureIcon = isPackaging
         ? Icons.camera_alt_rounded
         : Icons.document_scanner_rounded;
-    final bool confirmMode =
-        isConfirmStage &&
-        _activeCaptureStep == _CaptureStep.regNumber &&
-        (_regShotCaptured || _regCaptureSkipped) &&
-        !_pendingRegCapture;
-    final IconData mainIcon = confirmMode
-        ? Icons.check_rounded
-        : (captured ? Icons.refresh_rounded : captureIcon);
-    final String mainLabel = confirmMode
-        ? (_isMatching ? 'Matching...' : 'Confirm scan')
-        : (captured
-              ? (isPackaging ? 'Retake packaging' : 'Retake reg number')
-              : (isPackaging ? 'Capture packaging' : 'Capture reg number'));
-    final VoidCallback? mainAction = confirmMode
-        ? (confirmEnabled ? _confirmScan : null)
-        : (disabled
-              ? null
-              : (isPackaging ? _startPackagingCapture : _startRegCapture));
+    final IconData primaryIcon = hasCapture
+        ? Icons.refresh_rounded
+        : captureIcon;
+    final String primaryLabel = !categorySelected
+        ? 'Select category'
+        : hasCapture
+        ? (isPackaging ? 'Retake packaging photo' : 'Retake reg photo')
+        : (isPackaging ? 'Capture packaging photo' : 'Capture reg number');
+    final VoidCallback? primaryAction = disabled
+        ? null
+        : (isPackaging ? _startPackagingCapture : _startRegCapture);
 
     final IconData skipIcon = skipped
         ? Icons.undo_rounded
         : Icons.visibility_off_rounded;
     final String skipLabel = skipped
-        ? (isPackaging ? 'Use packaging capture' : 'Add reg capture')
+        ? (isPackaging ? 'Use packaging capture' : 'Use reg capture')
         : (isPackaging ? 'Skip packaging' : 'Skip reg capture');
     final VoidCallback? skipAction = disabled
         ? null
@@ -1574,154 +1693,119 @@ class _ScannerScreenState extends State<ScannerScreen> {
               ? (skipped ? _resumePackagingCapture : _skipPackagingCapture)
               : (skipped ? _resumeRegCapture : _skipRegCapture));
 
-    final VoidCallback? stepToggle = disabled
-        ? null
-        : () {
-            setState(() {
-              final nextStep = isPackaging
-                  ? _CaptureStep.regNumber
-                  : _CaptureStep.packaging;
-              _activeCaptureStep = nextStep;
-              if (nextStep == _CaptureStep.regNumber) {
-                _pendingRegCapture = !_regShotCaptured;
-              } else {
-                _pendingRegCapture = false;
-              }
-            });
-          };
-
-    final String stepTitle = confirmMode
-        ? 'Step 3 - Confirm'
-        : (isPackaging ? 'Step 1 - Packaging' : 'Step 2 - Registration');
-    final String statusText = confirmMode
-        ? (_isMatching ? 'Matching in progress' : 'Ready to submit')
-        : (skipped
-              ? (isPackaging
-                    ? 'Skipped (uses packaging photo only)'
-                    : 'Skipped (uses packaging text)')
-              : (captured ? 'Capture saved' : 'Ready to capture'));
+    final String stepTitle = isPackaging
+        ? 'Step 1 - Packaging'
+        : 'Step 2 - Registration';
+    final String statusText = !categorySelected
+        ? 'Select a category to start scanning'
+        : skipped
+        ? (isPackaging
+              ? 'Skipped (image-only scan)'
+              : 'Skipped (uses packaging text)')
+        : hasCapture
+        ? 'Capture saved'
+        : 'Ready to capture';
 
     return SafeArea(
       minimum: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          _buildStepTabs(),
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
               color: Colors.black.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(24),
+              borderRadius: BorderRadius.circular(18),
             ),
             child: Column(
-              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
                   stepTitle,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: textColor,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  statusText,
-                  style: theme.textTheme.labelSmall?.copyWith(color: muted),
-                ),
-                const SizedBox(height: 8),
-                _CaptureSummaryRow(
-                  packagingDone: _wideShotCaptured || _packageCaptureSkipped,
-                  regDone: _regShotCaptured || _regCaptureSkipped,
-                ),
-                if ((_regShotCaptured || _regCaptureSkipped) &&
-                    (_confirmedRegNumber?.isNotEmpty ?? false)) ...[
-                  const SizedBox(height: 6),
-                  _RegNumberChip(
-                    regNumber: _confirmedRegNumber!,
-                    onCopy: () async {
-                      await Clipboard.setData(
-                        ClipboardData(text: _confirmedRegNumber!),
-                      );
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Registration number copied'),
-                          duration: Duration(seconds: 1),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-                if ((_packagingImagePath != null &&
-                        (_wideShotCaptured || _packageCaptureSkipped)) ||
-                    (_regImagePath != null &&
-                        (_regShotCaptured || _regCaptureSkipped))) ...[
-                  const SizedBox(height: 6),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (_packagingImagePath != null)
-                        _CapturePreviewButton(
-                          label: 'Packaging preview',
-                          icon: Icons.inventory_2_rounded,
-                          path: _packagingImagePath!,
-                        ),
-                      if (_regImagePath != null)
-                        _CapturePreviewButton(
-                          label: 'Reg preview',
-                          icon: Icons.confirmation_number_rounded,
-                          path: _regImagePath!,
-                        ),
-                    ],
-                  ),
-                ],
-                const SizedBox(height: 6),
-                SizedBox(
-                  width: 72,
-                  height: 72,
-                  child: RawMaterialButton(
-                    onPressed: disabled ? null : mainAction,
-                    fillColor: Colors.white.withValues(alpha: 0.95),
-                    shape: const CircleBorder(),
-                    elevation: 4,
-                    child: Icon(
-                      mainIcon,
-                      size: 28,
-                      color: isConfirmStage ? Colors.green : theme.primaryColor,
-                    ),
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  mainLabel,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: textColor,
-                    fontWeight: FontWeight.w600,
+                  statusText,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: Colors.white70,
                   ),
                 ),
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _OverlayActionChip(
-                      icon: skipIcon,
-                      label: skipLabel,
-                      onPressed: skipAction,
-                    ),
-                    _OverlayActionChip(
-                      icon: Icons.swap_horiz_rounded,
-                      label: isPackaging ? 'Go to Step 2' : 'Back to Step 1',
-                      onPressed: stepToggle,
-                    ),
-                  ],
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: primaryAction,
+                  icon: Icon(primaryIcon),
+                  label: Text(primaryLabel),
                 ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: skipAction,
+                  icon: Icon(skipIcon),
+                  label: Text(skipLabel),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white30),
+                  ),
+                ),
+                if (!_canUseRegStep && isPackaging)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Capture or skip packaging to unlock the reg step.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
+          if (_canConfirmFlow)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: FilledButton.icon(
+                onPressed: _isMatching ? null : _confirmScan,
+                icon: _isMatching
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.check_rounded),
+                label: Text(_isMatching ? 'Matching...' : 'Confirm scan'),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
+}
+
+Widget _roundIconButton({
+  required IconData icon,
+  required VoidCallback onTap,
+  String? tooltip,
+}) {
+  return Material(
+    color: Colors.black.withValues(alpha: 0.35),
+    shape: const CircleBorder(),
+    child: IconButton(
+      icon: Icon(icon, color: Colors.white),
+      onPressed: onTap,
+      tooltip: tooltip,
+    ),
+  );
 }
 
 class _GuideStep extends StatelessWidget {
@@ -1769,129 +1853,6 @@ class _GuideStep extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _OverlayActionChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback? onPressed;
-
-  const _OverlayActionChip({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final bool enabled = onPressed != null;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: TextButton.icon(
-        onPressed: onPressed,
-        style: TextButton.styleFrom(
-          foregroundColor: enabled ? Colors.white : Colors.white60,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-        ),
-        icon: Icon(icon, size: 18),
-        label: Text(label),
-      ),
-    );
-  }
-}
-
-Widget _roundIconButton({
-  required IconData icon,
-  required VoidCallback onTap,
-  String? tooltip,
-}) {
-  return Material(
-    color: Colors.black.withValues(alpha: 0.35),
-    shape: const CircleBorder(),
-    child: IconButton(
-      icon: Icon(icon, color: Colors.white),
-      onPressed: onTap,
-      tooltip: tooltip,
-    ),
-  );
-}
-
-class _MatchingDialog extends StatelessWidget {
-  const _MatchingDialog();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(
-              height: 22,
-              width: 22,
-              child: CircularProgressIndicator(strokeWidth: 2.4),
-            ),
-            const SizedBox(width: 14),
-            Text(
-              'Matching product?',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _RegNumberChip extends StatelessWidget {
-  final String regNumber;
-  final VoidCallback onCopy;
-
-  const _RegNumberChip({required this.regNumber, required this.onCopy});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white24),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(
-            Icons.confirmation_number_rounded,
-            size: 16,
-            color: Colors.white,
-          ),
-          const SizedBox(width: 6),
-          Text(
-            regNumber.toUpperCase(),
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(width: 6),
-          GestureDetector(
-            onTap: onCopy,
-            child: const Icon(
-              Icons.copy_rounded,
-              color: Colors.white70,
-              size: 16,
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -2003,6 +1964,36 @@ class _CaptureSummaryPill extends StatelessWidget {
                 color: color,
                 fontWeight: FontWeight.w600,
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MatchingDialog extends StatelessWidget {
+  const _MatchingDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              height: 22,
+              width: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            ),
+            const SizedBox(width: 14),
+            Text(
+              'Matching product...',
+              style: theme.textTheme.titleSmall,
             ),
           ],
         ),

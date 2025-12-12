@@ -35,3 +35,10 @@
 ## Packaging Model Notes
 - The packaging helper now expects `assets/labels.txt` to list each trained product class (e.g., `0 555_tuna_spicy`). Keep the order in sync with your dataset folders so the predicted label names are accurate.
 - `image_classifier.dart` uses those label names directly for `ImagePrediction.productName`, and authenticity is just the model confidence (suspicious % = 1 - authenticity). Ensure new models respect this convention before swapping in a new `.tflite`.
+
+## Image Scan Flow
+1. Select a model category (Food / Cosmetic / Supplement / Medicine). Capture controls stay disabled until one is chosen.
+2. Step 1 – Packaging: capture or retake the packaging photo, or explicitly tap "Skip packaging" if you want an image-only scan.
+3. Step 2 – Registration: once packaging is captured or skipped, capture/retake the reg number shot or skip it similarly.
+4. When both steps are satisfied, tap Confirm Scan. If the packaging model recognizes the product you still reach the Scan Result screen even without an FDA match.
+

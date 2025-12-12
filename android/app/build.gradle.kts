@@ -9,7 +9,7 @@ plugins {
 
 android {
     namespace = "com.example.basta_fda"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     // Force the highest NDK required by plugins (backward compatible)
     ndkVersion = "27.0.12077973"
 

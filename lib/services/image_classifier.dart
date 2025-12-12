@@ -5,6 +5,37 @@ import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:basta_fda/data/packaging_trained_products.dart';
 
+enum PackagingModelCategory { food, cosmetics, supplements, medicine }
+
+class PackagingModelConfig {
+  final String modelAsset;
+  final String labelAsset;
+
+  const PackagingModelConfig({
+    required this.modelAsset,
+    required this.labelAsset,
+  });
+}
+
+const Map<PackagingModelCategory, PackagingModelConfig> _modelConfigs = {
+  PackagingModelCategory.food: PackagingModelConfig(
+    modelAsset: 'assets/food_model.tflite',
+    labelAsset: 'assets/labels.txt',
+  ),
+  PackagingModelCategory.cosmetics: PackagingModelConfig(
+    modelAsset: 'assets/models/cosmetics_model.tflite',
+    labelAsset: 'assets/labels_cosmetics.txt',
+  ),
+  PackagingModelCategory.supplements: PackagingModelConfig(
+    modelAsset: 'assets/models/supplements_model.tflite',
+    labelAsset: 'assets/labels_supplements.txt',
+  ),
+  PackagingModelCategory.medicine: PackagingModelConfig(
+    modelAsset: 'assets/models/medicine_model.tflite',
+    labelAsset: 'assets/labels_medicine.txt',
+  ),
+};
+
 class ImagePrediction {
   final String category;
   final String productName;
@@ -51,6 +82,7 @@ class PackagingImageClassifier {
   Interpreter? _interpreter;
   List<String>? _labels;
   String? _loadedModelAsset;
+  PackagingModelCategory _currentCategory = PackagingModelCategory.food;
   int _outputClassCount = 0;
   int _inputHeight = 224;
   int _inputWidth = 224;
@@ -59,9 +91,13 @@ class PackagingImageClassifier {
 
   static const double _minConfidence = 0.45;
 
-  Future<void> _ensureLoaded() async {
-    if (_interpreter != null && _labels != null) return;
-    _loading ??= _loadResources();
+  Future<void> _ensureLoaded(PackagingModelCategory category) async {
+    if (_interpreter != null &&
+        _labels != null &&
+        _currentCategory == category) {
+      return;
+    }
+    _loading ??= _loadResources(category);
     try {
       await _loading;
     } finally {
@@ -69,9 +105,14 @@ class PackagingImageClassifier {
     }
   }
 
-  Future<void> _loadResources() async {
+  Future<void> _loadResources(PackagingModelCategory category) async {
     try {
+      _currentCategory = category;
+      final config =
+          _modelConfigs[category] ??
+          _modelConfigs[PackagingModelCategory.food]!;
       final modelCandidates = [
+        config.modelAsset,
         'assets/food_model.tflite',
         'assets/model_unquant.tflite',
         'model_unquant.tflite',
@@ -91,7 +132,7 @@ class PackagingImageClassifier {
           final opHint = _describeUnsupportedOp(e);
           if (asset.contains('food_model') && opHint != null) {
             debugPrint(
-              'food_model.tflite requires a newer TensorFlow Lite runtime ($opHint). Falling back.',
+              '${config.modelAsset} requires a newer TensorFlow Lite runtime ($opHint). Falling back.',
             );
           }
           debugPrint('$stack');
@@ -126,8 +167,22 @@ class PackagingImageClassifier {
       } else if (_labels != null && _labels!.isNotEmpty) {
         _outputClassCount = _labels!.length;
       }
-      final rawLabels = await rootBundle.loadString('assets/labels.txt');
-      _labels = rawLabels
+      final labelCandidates = [config.labelAsset, 'assets/labels.txt'];
+      String? labelText;
+      Object? labelError;
+      for (final asset in labelCandidates) {
+        try {
+          labelText = await rootBundle.loadString(asset);
+          debugPrint('Loaded packaging labels: $asset');
+          break;
+        } catch (e) {
+          labelError = e;
+        }
+      }
+      if (labelText == null) {
+        throw labelError ?? Exception('Unable to load label file');
+      }
+      _labels = labelText
           .split('\n')
           .map((line) => line.trim())
           .where((line) => line.isNotEmpty)
@@ -148,10 +203,11 @@ class PackagingImageClassifier {
     required String rawText,
     String? additionalText,
     String? imagePath,
+    PackagingModelCategory category = PackagingModelCategory.food,
   }) async {
     final normalized = _normalizeText(rawText, additionalText);
 
-    await _ensureLoaded();
+    await _ensureLoaded(category);
 
     if (_loadedModelAsset != null && imagePath != null) {
       debugPrint('Packaging scan using model: $_loadedModelAsset');
@@ -201,13 +257,13 @@ class PackagingImageClassifier {
       final suspicious = (1 - authenticity).clamp(0.0, 1.0).toDouble();
       final productName = labelInfo.category;
       final matchPercent = (authenticity * 100).toStringAsFixed(1);
-      final verdictText = '$productName ($matchPercent% match)';
       final verdictValue = suspicious > authenticity
           ? 'suspicious'
           : 'authentic';
+      final categoryLabel = _modelCategoryLabel(category);
 
       return ImagePrediction(
-        category: productName,
+        category: categoryLabel,
         productName: productName,
         confidence: confidence,
         source: 'tflite',
@@ -358,6 +414,19 @@ class PackagingImageClassifier {
     }
     final category = _outputClassCount > 0 ? 'Class ${index + 1}' : 'Unknown';
     return _LabelInfo(category: category, status: 'authentic');
+  }
+
+  String _modelCategoryLabel(PackagingModelCategory category) {
+    switch (category) {
+      case PackagingModelCategory.food:
+        return 'Food';
+      case PackagingModelCategory.cosmetics:
+        return 'Cosmetics';
+      case PackagingModelCategory.supplements:
+        return 'Supplements';
+      case PackagingModelCategory.medicine:
+        return 'Medicine';
+    }
   }
 
   String _titleCase(String input) {
