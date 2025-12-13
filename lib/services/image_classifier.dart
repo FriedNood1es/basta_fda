@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
@@ -19,7 +21,7 @@ class PackagingModelConfig {
 
 const Map<PackagingModelCategory, PackagingModelConfig> _modelConfigs = {
   PackagingModelCategory.food: PackagingModelConfig(
-    modelAsset: 'assets/food_model.tflite',
+    modelAsset: 'assets/models/food_model.tflite',
     labelAsset: 'assets/labels.txt',
   ),
   PackagingModelCategory.cosmetics: PackagingModelConfig(
@@ -89,7 +91,11 @@ class PackagingImageClassifier {
   int _inputChannels = 3;
   Future<void>? _loading;
 
-  static const double _minConfidence = 0.45;
+  static const int _maxFrameBatch = 5;
+  static const double _absoluteMinConfidence = 0.15;
+
+  double _suspiciousThreshold = 0.5;
+  double _temperature = 1.0;
 
   Future<void> _ensureLoaded(PackagingModelCategory category) async {
     if (_interpreter != null &&
@@ -113,6 +119,7 @@ class PackagingImageClassifier {
           _modelConfigs[PackagingModelCategory.food]!;
       final modelCandidates = [
         config.modelAsset,
+        'assets/models/food_model.tflite',
         'assets/food_model.tflite',
         'assets/model_unquant.tflite',
         'model_unquant.tflite',
@@ -199,11 +206,24 @@ class PackagingImageClassifier {
     }
   }
 
+  void updateConfidenceConfig({
+    double? suspiciousThreshold,
+    double? temperature,
+  }) {
+    if (suspiciousThreshold != null) {
+      _suspiciousThreshold = suspiciousThreshold.clamp(0.1, 0.95);
+    }
+    if (temperature != null && temperature > 0) {
+      _temperature = temperature;
+    }
+  }
+
   Future<ImagePrediction?> classify({
     required String rawText,
     String? additionalText,
     String? imagePath,
     PackagingModelCategory category = PackagingModelCategory.food,
+    List<String>? framePaths,
   }) async {
     final normalized = _normalizeText(rawText, additionalText);
 
@@ -213,7 +233,9 @@ class PackagingImageClassifier {
       debugPrint('Packaging scan using model: $_loadedModelAsset');
     }
 
-    if (_interpreter == null || imagePath == null) {
+    final frames = _prepareFrameBatch(imagePath, framePaths);
+
+    if (_interpreter == null || frames.isEmpty) {
       return _classifyFromText(normalized);
     }
 
@@ -225,30 +247,38 @@ class PackagingImageClassifier {
     }
 
     try {
-      final file = File(imagePath);
-      if (!await file.exists()) {
+      final aggregated = List<double>.filled(classCount, 0);
+      var processedFrames = 0;
+
+      for (var i = 0; i < frames.length; i++) {
+        final probs = await _runFrame(frames[i], classCount, i + 1);
+        if (probs == null || probs.isEmpty) continue;
+        final limit = math.min(classCount, probs.length);
+        for (var j = 0; j < limit; j++) {
+          aggregated[j] += probs[j];
+        }
+        processedFrames++;
+      }
+
+      if (processedFrames == 0) {
+        debugPrint('Packaging helper: no usable frames, falling back to text');
         return _classifyFromText(normalized);
       }
-      final bytes = await file.readAsBytes();
-      final decoded = img.decodeImage(bytes);
-      if (decoded == null) {
-        return _classifyFromText(normalized);
-      }
-      final input = _convertToInput(decoded);
-      final output = List.generate(
-        1,
-        (_) => List<double>.filled(classCount, 0),
+
+      final averaged = aggregated
+          .map((score) => score / processedFrames)
+          .toList();
+      debugPrint(
+        'Packaging avg probs ($processedFrames frames): ${averaged.toString()}',
       );
 
-      _interpreter!.run(input, output);
-      final scores = output.first;
-      debugPrint('Packaging logits: ' + scores.toString());
-      final bestIndex = _argMax(scores);
+      final bestIndex = _argMax(averaged);
       if (bestIndex < 0) {
         return _classifyFromText(normalized);
       }
-      final confidence = scores[bestIndex];
-      if (confidence.isNaN || confidence < _minConfidence) {
+      final confidence = averaged[bestIndex];
+      if (confidence.isNaN || confidence < _absoluteMinConfidence) {
+        debugPrint('Packaging helper: confidence below absolute minimum');
         return _classifyFromText(normalized);
       }
 
@@ -256,16 +286,31 @@ class PackagingImageClassifier {
       final authenticity = confidence.clamp(0.0, 1.0).toDouble();
       final suspicious = (1 - authenticity).clamp(0.0, 1.0).toDouble();
       final productName = labelInfo.category;
-      final matchPercent = (authenticity * 100).toStringAsFixed(1);
-      final verdictValue = suspicious > authenticity
-          ? 'suspicious'
-          : 'authentic';
+      final verdictValue = authenticity >= _suspiciousThreshold
+          ? 'authentic'
+          : 'suspicious';
       final categoryLabel = _modelCategoryLabel(category);
+
+      debugPrint(
+        'Packaging final => $productName | confidence ' +
+            (authenticity * 100).toStringAsFixed(1) +
+            '% (threshold ${(_suspiciousThreshold * 100).toStringAsFixed(0)}%)',
+      );
+
+      if (authenticity < _suspiciousThreshold) {
+        final heuristic = _classifyFromText(normalized);
+        if (heuristic != null) {
+          debugPrint(
+            'Packaging helper falling back to text heuristic due to low authenticity',
+          );
+          return heuristic;
+        }
+      }
 
       return ImagePrediction(
         category: categoryLabel,
         productName: productName,
-        confidence: confidence,
+        confidence: authenticity,
         source: 'tflite',
         verdict: verdictValue,
         authenticScore: authenticity,
@@ -278,13 +323,14 @@ class PackagingImageClassifier {
     }
   }
 
-  List<List<List<List<double>>>> _convertToInput(img.Image image) {
+  List<List<List<Float32List>>> _convertToInput(img.Image image) {
     final resized = img.copyResize(
       image,
       width: _inputWidth,
       height: _inputHeight,
       interpolation: img.Interpolation.linear,
     );
+    final channels = _inputChannels.clamp(1, 4).toInt();
     return [
       List.generate(
         _inputHeight,
@@ -293,18 +339,115 @@ class PackagingImageClassifier {
           final r = pixel.rNormalized.toDouble();
           final g = pixel.gNormalized.toDouble();
           final b = pixel.bNormalized.toDouble();
-          if (_inputChannels <= 1) {
+          if (channels <= 1) {
             final gray = (r + g + b) / 3;
-            return [gray];
+            final buffer = Float32List(1);
+            buffer[0] = gray;
+            return buffer;
           }
-          final values = [r, g, b];
-          if (_inputChannels >= values.length) {
-            return values;
+          final buffer = Float32List(channels);
+          final values = [r, g, b, pixel.aNormalized.toDouble()];
+          for (var i = 0; i < channels; i++) {
+            buffer[i] = i < values.length ? values[i] : 0;
           }
-          return values.sublist(0, _inputChannels);
+          return buffer;
         }),
       ),
     ];
+  }
+
+  List<String> _prepareFrameBatch(String? fallback, List<String>? framePaths) {
+    final result = <String>[];
+    final seen = <String>{};
+    void addPath(String? path) {
+      if (path == null || path.isEmpty || seen.length >= _maxFrameBatch) {
+        return;
+      }
+      if (seen.add(path)) {
+        result.add(path);
+      }
+    }
+
+    if (framePaths != null && framePaths.isNotEmpty) {
+      for (final path in framePaths) {
+        addPath(path);
+      }
+    } else {
+      addPath(fallback);
+    }
+    return result;
+  }
+
+  Future<List<double>?> _runFrame(
+    String path,
+    int classCount,
+    int frameIndex,
+  ) async {
+    final file = File(path);
+    if (!await file.exists()) {
+      debugPrint('Packaging frame $frameIndex missing at $path');
+      return null;
+    }
+    final bytes = await file.readAsBytes();
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) {
+      debugPrint('Packaging frame $frameIndex decode failed');
+      return null;
+    }
+    final input = _convertToInput(decoded);
+    final output = List.generate(1, (_) => List<double>.filled(classCount, 0));
+    _interpreter!.run(input, output);
+    final raw = output.first;
+    debugPrint('Packaging raw[f$frameIndex]: ' + raw.toString());
+    final probs = _calibrateProbabilities(raw);
+    debugPrint('Packaging probs[f$frameIndex]: ' + probs.toString());
+    return probs;
+  }
+
+  List<double> _calibrateProbabilities(List<double> raw) {
+    if (raw.isEmpty) return raw;
+    final sum = raw.fold(0.0, (a, b) => a + b);
+    final bool looksNormalized =
+        raw.every(
+          (value) => value.isFinite && value >= 0.0 && value <= 1.0001,
+        ) &&
+        (sum - 1.0).abs() <= 0.05;
+    final base = looksNormalized ? List<double>.from(raw) : _softmax(raw);
+    return _applyTemperature(base);
+  }
+
+  List<double> _applyTemperature(List<double> probs) {
+    final temp = _temperature <= 0 ? 1.0 : _temperature;
+    if ((temp - 1.0).abs() < 0.0001) {
+      return List<double>.from(probs);
+    }
+    final adjusted = probs.map((value) {
+      final safe = value.clamp(1e-9, 1.0).toDouble();
+      return math.pow(safe, 1 / temp).toDouble();
+    }).toList();
+    final sum = adjusted.fold(0.0, (a, b) => a + b);
+    if (sum == 0) {
+      return probs;
+    }
+    return adjusted.map((value) => value / sum).toList();
+  }
+
+  List<double> _softmax(List<double> logits) {
+    if (logits.isEmpty) return logits;
+    final temp = _temperature <= 0 ? 1.0 : _temperature;
+    final scaled = logits.map((value) => value / temp).toList();
+    final maxLogit = scaled.reduce(math.max);
+    var sum = 0.0;
+    final expValues = List<double>.filled(scaled.length, 0);
+    for (var i = 0; i < scaled.length; i++) {
+      final value = math.exp(scaled[i] - maxLogit);
+      expValues[i] = value;
+      sum += value;
+    }
+    if (sum == 0) {
+      return logits;
+    }
+    return expValues.map((value) => value / sum).toList();
   }
 
   ImagePrediction? _classifyFromText(String normalized) {

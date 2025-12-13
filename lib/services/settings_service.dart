@@ -10,6 +10,7 @@ class SettingsService {
   bool reviewBeforeSearch = true;
   bool strictMatching = true;
   bool wifiOnlyUpdates = false;
+  double packagingSuspicionThreshold = 0.5;
   // Suggest adding another package side after a scan when OCR evidence looks incomplete
   bool hasSeenWelcome = false;
   bool hasSeenScopeNotice = false;
@@ -40,6 +41,17 @@ class SettingsService {
         reviewBeforeSearch = (json['reviewBeforeSearch'] ?? true) as bool;
         strictMatching = (json['strictMatching'] ?? true) as bool;
         wifiOnlyUpdates = (json['wifiOnlyUpdates'] ?? false) as bool;
+        final thresh = json['packagingSuspicionThreshold'];
+        if (thresh is num) {
+          final value = thresh.toDouble();
+          if (value < 0.3) {
+            packagingSuspicionThreshold = 0.3;
+          } else if (value > 0.9) {
+            packagingSuspicionThreshold = 0.9;
+          } else {
+            packagingSuspicionThreshold = value;
+          }
+        }
         hasSeenWelcome = (json['hasSeenWelcome'] ?? false) as bool;
         hasSeenScopeNotice = (json['hasSeenScopeNotice'] ?? false) as bool;
         isLoggedIn = (json['isLoggedIn'] ?? false) as bool;
@@ -72,6 +84,7 @@ class SettingsService {
       'reviewBeforeSearch': reviewBeforeSearch,
       'strictMatching': strictMatching,
       'wifiOnlyUpdates': wifiOnlyUpdates,
+      'packagingSuspicionThreshold': packagingSuspicionThreshold,
       'hasSeenWelcome': hasSeenWelcome,
       'hasSeenScopeNotice': hasSeenScopeNotice,
       'isLoggedIn': isLoggedIn,
@@ -88,4 +101,3 @@ class SettingsService {
     await f.writeAsString(data, flush: true);
   }
 }
-

@@ -8,6 +8,7 @@ import 'package:basta_fda/screens/reports_screen.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:basta_fda/services/history_service.dart';
+import 'package:basta_fda/services/image_classifier.dart';
 import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:basta_fda/data/packaging_trained_products.dart';
@@ -194,8 +195,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ListTile(
                   leading: const Icon(Icons.inventory_2_outlined),
                   title: const Text('Packaging coverage (trained list)'),
-                  subtitle: const Text('See products with packaging helper support'),
+                  subtitle: const Text(
+                    'See products with packaging helper support',
+                  ),
                   onTap: () => _showPackagingCoverageSheet(context),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.tune_rounded),
+                  title: const Text('Packaging authenticity threshold'),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Adjust how strict the packaging helper is before marking results suspicious. Current: ${(s.packagingSuspicionThreshold * 100).toStringAsFixed(0)}%',
+                      ),
+                      Slider(
+                        value: s.packagingSuspicionThreshold,
+                        min: 0.4,
+                        max: 0.7,
+                        divisions: 6,
+                        label:
+                            '${(s.packagingSuspicionThreshold * 100).toStringAsFixed(0)}%',
+                        onChanged: (value) {
+                          setState(() {
+                            s.packagingSuspicionThreshold = value;
+                          });
+                        },
+                        onChangeEnd: (value) {
+                          SettingsService.instance.packagingSuspicionThreshold =
+                              value;
+                          SettingsService.instance.save();
+                          PackagingImageClassifier.instance
+                              .updateConfidenceConfig(
+                                suspiciousThreshold: value,
+                              );
+                        },
+                      ),
+                    ],
+                  ),
                 ),
                 const Divider(),
                 AboutListTile(
@@ -319,10 +356,9 @@ void _showPackagingCoverageSheet(BuildContext context) {
                   Expanded(
                     child: Text(
                       'Packaging coverage',
-                      style: Theme.of(ctx)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   IconButton(
@@ -350,10 +386,9 @@ void _showPackagingCoverageSheet(BuildContext context) {
                         children: [
                           Text(
                             category,
-                            style: Theme.of(ctx)
-                                .textTheme
-                                .titleSmall
-                                ?.copyWith(fontWeight: FontWeight.w700),
+                            style: Theme.of(ctx).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                           const SizedBox(height: 6),
                           ...items.map(
@@ -361,8 +396,10 @@ void _showPackagingCoverageSheet(BuildContext context) {
                               padding: const EdgeInsets.symmetric(vertical: 2),
                               child: Row(
                                 children: [
-                                  const Icon(Icons.check_circle_outline,
-                                      size: 16),
+                                  const Icon(
+                                    Icons.check_circle_outline,
+                                    size: 16,
+                                  ),
                                   const SizedBox(width: 6),
                                   Expanded(child: Text(p.name)),
                                 ],
@@ -382,4 +419,3 @@ void _showPackagingCoverageSheet(BuildContext context) {
     },
   );
 }
-

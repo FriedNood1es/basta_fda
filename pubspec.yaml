@@ -83,8 +83,9 @@ flutter:
     - assets/cosmetic_product_notification.csv
     - assets/logo.png
     - assets/model_unquant.tflite
-    - assets/food_model.tflite
+    - assets/models/
     - assets/labels.txt
+    - assets/labels_medicine.txt
     - test_assets/packaging_eval/
     - test_assets/packaging_eval.csv
   # An image asset can refer to one or more resolution-specific "variants", see

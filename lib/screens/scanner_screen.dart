@@ -68,7 +68,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
   static const double _borderlineBrightness = 0.10;
   static const double _minSharpness = 10.0; // relaxed variance threshold
   static const double _borderlineSharpness = 6.5;
+  static const int _confidenceFrameBatch = 3;
+  static const Duration _confidenceFrameDelay = Duration(milliseconds: 120);
   String? _packagingImagePath;
+  final List<String> _packagingFramePaths = [];
   String? _regImagePath;
   String? _confirmedRegNumber;
   _CaptureStep _activeCaptureStep = _CaptureStep.packaging;
@@ -102,6 +105,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
     // Load user settings
     SettingsService.instance.load().then((_) {
       if (!mounted) return;
+      final settings = SettingsService.instance;
+      _imageClassifier.updateConfidenceConfig(
+        suspiciousThreshold: settings.packagingSuspicionThreshold,
+      );
       // Ensure history is scoped to the current session (guest vs user)
       try {
         final user = FirebaseAuth.instance.currentUser;
@@ -192,7 +199,151 @@ class _ScannerScreenState extends State<ScannerScreen> {
     });
   }
 
+  void _discardPackagingFrames({bool deleteFiles = false}) {
+    if (deleteFiles) {
+      for (final path in List<String>.from(_packagingFramePaths)) {
+        try {
+          File(path).deleteSync();
+        } catch (_) {}
+      }
+      if (_packagingImagePath != null &&
+          !_packagingFramePaths.contains(_packagingImagePath!)) {
+        try {
+          File(_packagingImagePath!).deleteSync();
+        } catch (_) {}
+      }
+    }
+    _packagingFramePaths.clear();
+  }
+
+  Future<List<String>> _captureConfidenceFrames(XFile primary) async {
+    final frames = <String>[primary.path];
+    if (!mounted || _controller == null) {
+      return frames;
+    }
+    for (var i = 1; i < _confidenceFrameBatch; i++) {
+      try {
+        await Future.delayed(_confidenceFrameDelay);
+        final extra = await _controller!.takePicture();
+        frames.add(extra.path);
+      } catch (e) {
+        debugPrint('[PACKAGING] burst frame $i failed: $e');
+        break;
+      }
+    }
+    return frames;
+  }
+
+  Future<void> _applyAutoFocusAndExposure({
+    Offset point = const Offset(0.5, 0.5),
+  }) async {
+    if (!mounted || _controller == null || !_controller!.value.isInitialized) {
+      return;
+    }
+    try {
+      await _controller!.setFocusMode(FocusMode.auto);
+    } catch (_) {}
+    try {
+      await _controller!.setExposureMode(ExposureMode.auto);
+    } catch (_) {}
+    try {
+      await _controller!.setFocusPoint(point);
+    } catch (_) {}
+    try {
+      await _controller!.setExposurePoint(point);
+    } catch (_) {}
+    try {
+      final minOffset = await _controller!.getMinExposureOffset();
+      final maxOffset = await _controller!.getMaxExposureOffset();
+      final target = 0.0;
+      final clamped = target < minOffset
+          ? minOffset
+          : target > maxOffset
+          ? maxOffset
+          : target;
+      await _controller!.setExposureOffset(clamped);
+    } catch (_) {}
+  }
+
+  Future<void> _prepareStillCapture() async {
+    await _applyAutoFocusAndExposure();
+    await Future.delayed(const Duration(milliseconds: 450));
+  }
+
+  Future<void> _showPackagingPreview() async {
+    final path = _packagingImagePath;
+    if (path == null || path.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No packaging photo captured yet.')),
+      );
+      return;
+    }
+    final file = File(path);
+    if (!await file.exists()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Packaging photo is no longer available.'),
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.black,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Packaging preview',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      tooltip: 'Close preview',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                AspectRatio(
+                  aspectRatio: 3 / 4,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(18),
+                    child: Image.file(file, fit: BoxFit.contain),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  icon: const Icon(Icons.check_rounded),
+                  label: const Text('Close'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   void _resetCaptureFlow({bool clearText = false}) {
+    _discardPackagingFrames(deleteFiles: true);
     setState(() {
       _wideShotCaptured = false;
       _regShotCaptured = false;
@@ -370,28 +521,22 @@ class _ScannerScreenState extends State<ScannerScreen> {
     }
     try {
       setState(() => _isCapturing = true);
-      // Stop the stream before capture to avoid conflicts
       await _stopStream();
 
-      // Autofocus pulse at center, small settle delay for sharpness
-      try {
-        final center = const Offset(0.5, 0.5);
-        await _controller!.setFocusMode(FocusMode.auto);
-        try {
-          await _controller!.setExposureMode(ExposureMode.auto);
-        } catch (_) {}
-        await _controller!.setFocusPoint(center);
-        await _controller!.setExposurePoint(center);
-        // Small settle delay for AF/AE to converge
-        await Future.delayed(const Duration(milliseconds: 450));
-      } catch (_) {}
+      await _prepareStillCapture();
 
-      // Lock orientation during capture when possible to prevent rotation glitches
+      final bool treatAsRegCapture =
+          _pendingRegCapture || _activeCaptureStep == _CaptureStep.regNumber;
+
       try {
         await _controller!.lockCaptureOrientation();
       } catch (_) {}
 
       final XFile file = await _controller!.takePicture();
+      List<String> framePaths = const <String>[];
+      if (!treatAsRegCapture) {
+        framePaths = await _captureConfidenceFrames(file);
+      }
       final inputImage = InputImage.fromFilePath(file.path);
       final RecognizedText result = await _textRecognizer.processImage(
         inputImage,
@@ -406,8 +551,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
       debugPrint('[OCR] cleaned (${scannedText.length} chars): $scannedText');
 
       if (!mounted) return scannedText;
-      final bool treatAsRegCapture =
-          _pendingRegCapture || _activeCaptureStep == _CaptureStep.regNumber;
+      if (!treatAsRegCapture) {
+        _discardPackagingFrames(deleteFiles: true);
+      }
       setState(() {
         _extractedText = scannedText;
         if (treatAsRegCapture) {
@@ -418,6 +564,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
         } else {
           _wideShotCaptured = true;
           _packagingImagePath = file.path;
+          final framesToUse = framePaths.isNotEmpty
+              ? framePaths
+              : <String>[file.path];
+          _packagingFramePaths
+            ..clear()
+            ..addAll(framesToUse);
           if (!_regShotCaptured && !_regCaptureSkipped) {
             _activeCaptureStep = _CaptureStep.regNumber;
           }
@@ -433,6 +585,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         try {
           await _controller!.unlockCaptureOrientation();
         } catch (_) {}
+        await _applyAutoFocusAndExposure();
       }
     }
   }
@@ -445,16 +598,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       setState(() => _isCapturing = true);
       await _stopStream();
 
-      try {
-        final center = const Offset(0.5, 0.5);
-        await _controller!.setFocusMode(FocusMode.auto);
-        try {
-          await _controller!.setExposureMode(ExposureMode.auto);
-        } catch (_) {}
-        await _controller!.setFocusPoint(center);
-        await _controller!.setExposurePoint(center);
-        await Future.delayed(const Duration(milliseconds: 450));
-      } catch (_) {}
+      await _prepareStillCapture();
 
       try {
         await _controller!.lockCaptureOrientation();
@@ -482,8 +626,14 @@ class _ScannerScreenState extends State<ScannerScreen> {
           ),
         );
       }
+      final frames = await _captureConfidenceFrames(file);
+      _discardPackagingFrames(deleteFiles: true);
       setState(() {
-        _packagingImagePath = file.path;
+        final storedFrames = frames.isNotEmpty ? frames : <String>[file.path];
+        _packagingImagePath = storedFrames.first;
+        _packagingFramePaths
+          ..clear()
+          ..addAll(storedFrames);
         _wideShotCaptured = true;
         if (!_regShotCaptured && !_regCaptureSkipped) {
           _activeCaptureStep = _CaptureStep.regNumber;
@@ -499,6 +649,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         try {
           await _controller!.unlockCaptureOrientation();
         } catch (_) {}
+        await _applyAutoFocusAndExposure();
       }
     }
   }
@@ -600,9 +751,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }
 
   void _skipPackagingCapture() {
+    _discardPackagingFrames(deleteFiles: true);
     setState(() {
       _packageCaptureSkipped = true;
       _wideShotCaptured = false;
+      _packagingImagePath = null;
       _activeCaptureStep = _CaptureStep.regNumber;
       _pendingRegCapture = !_regShotCaptured;
     });
@@ -788,6 +941,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
               additionalText: text,
               imagePath: _packagingImagePath,
               category: category,
+              framePaths: _packagingFramePaths.isEmpty
+                  ? null
+                  : List<String>.from(_packagingFramePaths),
             )
             .then((prediction) {
               if (prediction == null) {
@@ -1242,6 +1398,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     _stopStream();
     _textRecognizer.close();
     _controller?.dispose();
+    _discardPackagingFrames(deleteFiles: true);
     super.dispose();
   }
 
@@ -1665,6 +1822,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
         ? _packageCaptureSkipped
         : _regCaptureSkipped;
     final bool disabled = _isCapturing || _isMatching || !categorySelected;
+    final bool canPreviewPackaging =
+        isPackaging && !disabled && !skipped && _packagingImagePath != null;
 
     final IconData captureIcon = isPackaging
         ? Icons.camera_alt_rounded
@@ -1752,6 +1911,19 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     side: const BorderSide(color: Colors.white30),
                   ),
                 ),
+                if (canPreviewPackaging)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: OutlinedButton.icon(
+                      onPressed: _showPackagingPreview,
+                      icon: const Icon(Icons.photo_library_outlined),
+                      label: const Text('View packaging photo'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.white30),
+                      ),
+                    ),
+                  ),
                 if (!_canUseRegStep && isPackaging)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -1991,10 +2163,7 @@ class _MatchingDialog extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2.4),
             ),
             const SizedBox(width: 14),
-            Text(
-              'Matching product...',
-              style: theme.textTheme.titleSmall,
-            ),
+            Text('Matching product...', style: theme.textTheme.titleSmall),
           ],
         ),
       ),
