@@ -4,13 +4,10 @@ import 'package:basta_fda/services/settings_service.dart';
 import 'package:basta_fda/services/auth_service.dart';
 import 'package:basta_fda/services/fda_checker.dart';
 import 'package:basta_fda/screens/login_screen.dart';
-import 'package:basta_fda/screens/reports_screen.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:basta_fda/services/history_service.dart';
 import 'package:basta_fda/services/image_classifier.dart';
-import 'package:flutter/services.dart' show FilteringTextInputFormatter;
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:basta_fda/data/packaging_trained_products.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -23,29 +20,12 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _loading = true;
-  bool _isAdmin = false;
 
   @override
   void initState() {
     super.initState();
     SettingsService.instance.load().then((_) async {
       if (mounted) setState(() => _loading = false);
-      // Determine admin (best-effort; safe if Firebase not configured)
-      try {
-        if (Firebase.apps.isEmpty) {
-          await Firebase.initializeApp();
-        }
-        final u = FirebaseAuth.instance.currentUser;
-        if (u != null) {
-          final snap = await FirebaseFirestore.instance
-              .collection('admins')
-              .doc(u.uid)
-              .get();
-          if (mounted) setState(() => _isAdmin = snap.exists);
-        }
-      } catch (_) {
-        if (mounted) setState(() => _isAdmin = false);
-      }
     });
   }
 

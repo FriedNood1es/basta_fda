@@ -186,7 +186,7 @@ class _ChipHint extends StatelessWidget {
       avatar: Icon(icon, size: 16, color: theme.colorScheme.primary),
       label: Text(label),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      backgroundColor: theme.colorScheme.surfaceVariant.withValues(alpha: 0.6),
+      backgroundColor: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
     );
   }
 }
@@ -219,24 +219,3 @@ class _StepCard extends StatelessWidget {
   }
 }
 
-class _Bullet extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  const _Bullet({required this.icon, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: theme.colorScheme.primary),
-          const SizedBox(width: 12),
-          Expanded(child: Text(text)),
-        ],
-      ),
-    );
-  }
-}

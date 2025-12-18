@@ -19,7 +19,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: ScannerScreen(
         cameras: const [],
-        fdaChecker: FDAChecker(),
+        fdaChecker: fdaChecker,
         cameraEnabled: false,
       ),
     ));

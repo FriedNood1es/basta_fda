@@ -559,7 +559,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
       final breakdown = _imageConfidenceBreakdown();
       if (widget.isImageTrainedProduct) {
         if (breakdown.isNotEmpty) {
-          return _ImageConfidenceCard(
+          return _PackagingConfidenceCard(
             authenticScore: breakdown['authentic'] ?? 0,
             suspiciousScore: breakdown['suspicious'] ?? 0,
             productName: _titleCase(productInfo['brand_name']),
@@ -1177,12 +1177,14 @@ class _PackagingPreviewCard extends StatelessWidget {
   }
 }
 
-class _ImageConfidenceCard extends StatelessWidget {
+
+
+class _PackagingConfidenceCard extends StatelessWidget {
   final double authenticScore;
   final double suspiciousScore;
   final String productName;
 
-  const _ImageConfidenceCard({
+  const _PackagingConfidenceCard({
     required this.authenticScore,
     required this.suspiciousScore,
     required this.productName,
@@ -1191,6 +1193,33 @@ class _ImageConfidenceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final _ConfidenceDescriptor descriptor =
+        _ConfidenceDescriptor.fromScore(authenticScore, theme);
+    final indicators = List<Widget>.generate(3, (index) {
+      final filled = index < descriptor.level;
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        child: Icon(
+          Icons.check_circle_rounded,
+          size: 18,
+          color: filled
+              ? descriptor.color
+              : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.35),
+        ),
+      );
+    });
+
+    final bool highlightSuspicious = suspiciousScore >= 0.35;
+    final String note = highlightSuspicious
+        ? 'Packaging helper noticed a few unfamiliar cues. Slow down and compare seals, fonts, and lot codes yourself.'
+        : 'No strong suspicious cues surfaced in this capture. Still trust your instincts and inspect seals or labels if anything feels off.';
+
+    final trimmedName = productName.trim();
+    final String nameLabel =
+        trimmedName.isEmpty || trimmedName == 'N/A'
+            ? 'Packaging helper'
+            : '$trimmedName packaging helper';
+
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
@@ -1200,11 +1229,11 @@ class _ImageConfidenceCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(Icons.verified_rounded, color: theme.colorScheme.primary),
+                Icon(Icons.inventory_2_rounded, color: descriptor.color),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '$productName packaging confidence',
+                    nameLabel,
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
@@ -1213,20 +1242,25 @@ class _ImageConfidenceCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            _ConfidenceBar(
-              label: 'Authentic cues',
-              value: authenticScore,
-              color: theme.colorScheme.primary,
+            Text(
+              descriptor.title,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: descriptor.color,
+              ),
             ),
-            const SizedBox(height: 12),
-            _ConfidenceBar(
-              label: 'Suspicious cues',
-              value: suspiciousScore,
-              color: theme.colorScheme.error,
-            ),
+            const SizedBox(height: 6),
+            Row(children: indicators),
             const SizedBox(height: 12),
             Text(
-              'These percentages come from the packaging helper model. Combine them with the registration result before making a decision.',
+              descriptor.detail,
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(note, style: theme.textTheme.bodySmall),
+            const SizedBox(height: 8),
+            Text(
+              'Packaging helper guides you, but the FDA registration result is still the primary verdict.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
               ),
@@ -1238,57 +1272,49 @@ class _ImageConfidenceCard extends StatelessWidget {
   }
 }
 
-class _ConfidenceBar extends StatelessWidget {
-  final String label;
-  final double value;
+class _ConfidenceDescriptor {
+  final int level;
+  final String title;
+  final String detail;
   final Color color;
 
-  const _ConfidenceBar({
-    required this.label,
-    required this.value,
+  const _ConfidenceDescriptor({
+    required this.level,
+    required this.title,
+    required this.detail,
     required this.color,
   });
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final clampedValue = value.clamp(0.0, 1.0).toDouble();
-    final percent = (clampedValue * 100).toStringAsFixed(1);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              label,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            Text(
-              '$percent%',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: color,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: LinearProgressIndicator(
-            minHeight: 8,
-            value: clampedValue,
-            backgroundColor: color.withValues(alpha: 0.15),
-            valueColor: AlwaysStoppedAnimation<Color>(color),
-          ),
-        ),
-      ],
+  factory _ConfidenceDescriptor.fromScore(double score, ThemeData theme) {
+    final normalized = score.clamp(0.0, 1.0).toDouble();
+    if (normalized >= 0.75) {
+      return _ConfidenceDescriptor(
+        level: 3,
+        title: '✔✔✔ Strong match',
+        detail:
+            'Model recognized multiple authentic cues that match our reference gallery.',
+        color: Colors.green.shade600,
+      );
+    }
+    if (normalized >= 0.45) {
+      return _ConfidenceDescriptor(
+        level: 2,
+        title: '✔✔ Moderate match',
+        detail:
+            'Model saw some familiar details, but lighting or framing might need improvement.',
+        color: Colors.amber.shade800,
+      );
+    }
+    return _ConfidenceDescriptor(
+      level: 1,
+      title: '✔ Weak match',
+      detail:
+          'Model struggled to recognize this capture. Retake a clearer wide shot before trusting the packaging.',
+      color: theme.hintColor,
     );
   }
 }
+
 
 class _InfoBanner extends StatelessWidget {
   final IconData icon;
