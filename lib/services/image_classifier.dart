@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
@@ -22,7 +21,7 @@ class PackagingModelConfig {
 const Map<PackagingModelCategory, PackagingModelConfig> _modelConfigs = {
   PackagingModelCategory.food: PackagingModelConfig(
     modelAsset: 'assets/models/food_model.tflite',
-    labelAsset: 'assets/labels.txt',
+    labelAsset: 'assets/labels_food.txt',
   ),
   PackagingModelCategory.cosmetics: PackagingModelConfig(
     modelAsset: 'assets/models/cosmetics_model.tflite',
@@ -117,49 +116,19 @@ class PackagingImageClassifier {
       final config =
           _modelConfigs[category] ??
           _modelConfigs[PackagingModelCategory.food]!;
-      final modelCandidates = [
-        config.modelAsset,
-        'assets/models/food_model.tflite',
-        'assets/food_model.tflite',
-        'assets/model_unquant.tflite',
-        'model_unquant.tflite',
-      ];
       Interpreter? interpreter;
-      String? loadedAsset;
-      final errors = <Object>[];
-      for (final asset in modelCandidates) {
-        try {
-          interpreter = await Interpreter.fromAsset(asset);
-          loadedAsset = asset;
-          debugPrint('Loaded packaging model: $asset');
-          break;
-        } catch (e, stack) {
-          errors.add(e);
-          debugPrint('Failed to load packaging model $asset: $e');
-          final opHint = _describeUnsupportedOp(e);
-          if (asset.contains('food_model') && opHint != null) {
-            debugPrint(
-              '${config.modelAsset} requires a newer TensorFlow Lite runtime ($opHint). Falling back.',
-            );
-          }
-          debugPrint('$stack');
-        }
-      }
-      if (interpreter == null || loadedAsset == null) {
-        throw (errors.isNotEmpty
-            ? errors.last
-            : Exception('Unable to load packaging model asset'));
+      try {
+        interpreter = await Interpreter.fromAsset(config.modelAsset);
+        debugPrint('Loaded packaging model: ${config.modelAsset}');
+      } catch (e, stack) {
+        debugPrint(
+          'Failed to load packaging model ${config.modelAsset}: $e',
+        );
+        debugPrint('$stack');
+        rethrow;
       }
       _interpreter = interpreter;
-      _loadedModelAsset = loadedAsset;
-      if (!loadedAsset.contains('food_model')) {
-        final reason = errors.isNotEmpty
-            ? errors.last.toString()
-            : 'unknown error';
-        debugPrint(
-          'Packaging classifier fell back to legacy model_unquant ($reason).',
-        );
-      }
+      _loadedModelAsset = config.modelAsset;
       final inputTensor = _interpreter!.getInputTensor(0);
       final shape = inputTensor.shape;
       if (shape.length >= 4) {
@@ -174,20 +143,12 @@ class PackagingImageClassifier {
       } else if (_labels != null && _labels!.isNotEmpty) {
         _outputClassCount = _labels!.length;
       }
-      final labelCandidates = [config.labelAsset, 'assets/labels.txt'];
       String? labelText;
-      Object? labelError;
-      for (final asset in labelCandidates) {
-        try {
-          labelText = await rootBundle.loadString(asset);
-          debugPrint('Loaded packaging labels: $asset');
-          break;
-        } catch (e) {
-          labelError = e;
-        }
-      }
-      if (labelText == null) {
-        throw labelError ?? Exception('Unable to load label file');
+      try {
+        labelText = await rootBundle.loadString(config.labelAsset);
+        debugPrint('Loaded packaging labels: ${config.labelAsset}');
+      } catch (e) {
+        throw Exception('Unable to load label file ${config.labelAsset}: $e');
       }
       _labels = labelText
           .split('\n')
@@ -292,9 +253,7 @@ class PackagingImageClassifier {
       final categoryLabel = _modelCategoryLabel(category);
 
       debugPrint(
-        'Packaging final => $productName | confidence ' +
-            (authenticity * 100).toStringAsFixed(1) +
-            '% (threshold ${(_suspiciousThreshold * 100).toStringAsFixed(0)}%)',
+        'Packaging final => $productName | confidence ${(authenticity * 100).toStringAsFixed(1)}% (threshold ${(_suspiciousThreshold * 100).toStringAsFixed(0)}%)',
       );
 
       if (authenticity < _suspiciousThreshold) {
@@ -398,9 +357,9 @@ class PackagingImageClassifier {
     final output = List.generate(1, (_) => List<double>.filled(classCount, 0));
     _interpreter!.run(input, output);
     final raw = output.first;
-    debugPrint('Packaging raw[f$frameIndex]: ' + raw.toString());
+    debugPrint('Packaging raw[f$frameIndex]: $raw');
     final probs = _calibrateProbabilities(raw);
-    debugPrint('Packaging probs[f$frameIndex]: ' + probs.toString());
+    debugPrint('Packaging probs[f$frameIndex]: $probs');
     return probs;
   }
 
@@ -586,6 +545,79 @@ class PackagingImageClassifier {
         .join(' ');
   }
 
+  Future<void> logDebugAssetClassification({
+    required String assetPath,
+    PackagingModelCategory category = PackagingModelCategory.food,
+  }) async {
+    assert(() {
+      debugPrint('--- Debug classification for $assetPath ---');
+      return true;
+    }());
+    final data = await rootBundle.load(assetPath);
+    final decoded = img.decodeImage(data.buffer.asUint8List());
+    if (decoded == null) {
+      debugPrint('Debug asset decode failed for $assetPath');
+      return;
+    }
+    await _ensureLoaded(category);
+    if (_interpreter == null) {
+      debugPrint('Interpreter not initialized for $assetPath');
+      return;
+    }
+    final input = _convertToInput(decoded);
+    final stats = _tensorStats(input);
+    debugPrint(
+      'Input stats => min:' + stats.min.toStringAsFixed(4) +
+          ' max:' + stats.max.toStringAsFixed(4) +
+          ' avg:' + stats.mean.toStringAsFixed(4),
+    );
+    final classCount = _outputClassCount > 0
+        ? _outputClassCount
+        : (_labels?.length ?? 0);
+    if (classCount <= 0) {
+      debugPrint('Interpreter missing output shape information.');
+      return;
+    }
+    final output = List.generate(1, (_) => List<double>.filled(classCount, 0));
+    _interpreter!.run(input, output);
+    final probs = _calibrateProbabilities(output.first);
+    final labels = _labels ??
+        List.generate(classCount, (i) => 'Class ${i + 1}');
+    debugPrint('--- Label order ---');
+    for (var i = 0; i < labels.length && i < probs.length; i++) {
+      debugPrint('[' + i.toString() + '] ' + labels[i] +
+          ' => ' + probs[i].toStringAsFixed(4));
+    }
+    final best = _argMax(probs);
+    if (best >= 0 && best < labels.length) {
+      debugPrint(
+        'Top class: ' + labels[best] +
+            ' (confidence ' + (probs[best] * 100).toStringAsFixed(2) + '%)',
+      );
+    }
+  }
+
+  _TensorStats _tensorStats(List<List<List<Float32List>>> tensor) {
+    double min = double.infinity;
+    double max = double.negativeInfinity;
+    double sum = 0;
+    int count = 0;
+    for (final rows in tensor) {
+      for (final row in rows) {
+        for (final values in row) {
+          for (final value in values) {
+            if (value < min) min = value;
+            if (value > max) max = value;
+            sum += value;
+            count++;
+          }
+        }
+      }
+    }
+    final double mean = count == 0 ? 0.0 : sum / count;
+    return _TensorStats(min, max, mean);
+  }
+
   String? _describeUnsupportedOp(Object error) {
     final message = error.toString().toLowerCase();
     if (message.contains('fully_connected') &&
@@ -594,6 +626,14 @@ class PackagingImageClassifier {
     }
     return null;
   }
+}
+
+class _TensorStats {
+  final double min;
+  final double max;
+  final double mean;
+
+  const _TensorStats(this.min, this.max, this.mean);
 }
 
 class _LabelInfo {

@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'dart:io';
 import 'package:flutter/services.dart'
-    show Clipboard, ClipboardData, HapticFeedback;
+    show HapticFeedback;
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:basta_fda/models/scan_verdict.dart';
@@ -54,7 +55,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
   bool _regShotCaptured = false;
   bool _pendingRegCapture = false;
   bool _showCaptureGuide = false;
-  bool _packagingSummaryVisible = false;
   // Tap-to-focus + pinch-to-zoom
   Offset? _lastFocusTap;
   DateTime? _lastFocusAt;
@@ -72,7 +72,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
   static const Duration _confidenceFrameDelay = Duration(milliseconds: 120);
   String? _packagingImagePath;
   final List<String> _packagingFramePaths = [];
-  String? _regImagePath;
   String? _confirmedRegNumber;
   _CaptureStep _activeCaptureStep = _CaptureStep.packaging;
   bool _packageCaptureSkipped = false;
@@ -352,8 +351,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _pendingRegCapture = false;
       _activeCaptureStep = _CaptureStep.packaging;
       _packagingImagePath = null;
-      _regImagePath = null;
-      _regSelectionPending = false;
+        _regSelectionPending = false;
       _pendingRegText = null;
       _pendingRegRaw = null;
       _confirmedRegNumber = null;
@@ -560,7 +558,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
           _regShotCaptured = true;
           _pendingRegCapture = false;
           _activeCaptureStep = _CaptureStep.regNumber;
-          _regImagePath = file.path;
         } else {
           _wideShotCaptured = true;
           _packagingImagePath = file.path;
@@ -816,8 +813,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
     if (!_regCaptureSkipped &&
         (_confirmedRegNumber == null || _pendingRegCapture)) {
       final selected = await _promptRegSelection(
-        initial: _pendingRegText ?? _extractedText ?? '',
-        rawText: _pendingRegRaw ?? _lastRawText ?? _extractedText ?? '',
+        initial: _pendingRegText ?? _extractedText,
+        rawText: _pendingRegRaw ?? _lastRawText ?? _extractedText,
         allowRetake: true,
       );
       if (!selected) return;
@@ -956,11 +953,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
               final productName = info['product'] ?? 'unknown';
               final confidenceText = info['confidence'] ?? '?';
               debugPrint(
-                'Packaging helper result: ' +
-                    productName +
-                    ' (confidence ' +
-                    confidenceText +
-                    ')',
+                'Packaging helper result: $productName (confidence $confidenceText)',
               );
               return ImageCheckResult(
                 status: ImageCheckStatus.recognized,
@@ -968,7 +961,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
               );
             })
             .catchError((error) {
-              debugPrint('Packaging helper failed: ' + error.toString());
+              debugPrint('Packaging helper failed: $error');
               return const ImageCheckResult(status: ImageCheckStatus.failed);
             });
       } catch (_) {
@@ -1093,6 +1086,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   ),
                 ),
                 actions: [
+          if (kDebugMode)
+            IconButton(
+              tooltip: 'Log debug asset',
+              icon: const Icon(Icons.bug_report_outlined),
+              onPressed: _runDebugAssetProbe,
+            ),
                   TextButton(
                     onPressed: () => Navigator.of(ctx).pop(),
                     child: const Text('View Details'),
@@ -1500,6 +1499,27 @@ class _ScannerScreenState extends State<ScannerScreen> {
     );
   }
 
+  Future<void> _runDebugAssetProbe() async {
+    if (!kDebugMode) return;
+    try {
+      await _imageClassifier.logDebugAssetClassification(
+        assetPath: 'assets/debug/555_tuna_spicy_auth_23.jpg',
+        category: _selectedCategory ?? PackagingModelCategory.food,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Logged debug asset classification. Check console.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Debug asset failed: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!widget.cameraEnabled) {
@@ -1518,6 +1538,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
         centerTitle: true,
         title: const Text('Scan Product'),
         actions: [
+          if (kDebugMode)
+            IconButton(
+              tooltip: 'Log debug asset',
+              icon: const Icon(Icons.bug_report_outlined),
+              onPressed: _runDebugAssetProbe,
+            ),
           IconButton(
             tooltip: 'History',
             icon: const Icon(Icons.history_rounded),
@@ -2025,121 +2051,6 @@ class _GuideStep extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _CapturePreviewButton extends StatelessWidget {
-  final String path;
-  final String label;
-  final IconData icon;
-
-  const _CapturePreviewButton({
-    required this.path,
-    required this.label,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (path.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: TextButton.icon(
-        onPressed: () async {
-          await showDialog<void>(
-            context: context,
-            builder: (ctx) => Dialog(
-              insetPadding: const EdgeInsets.all(20),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.file(File(path), fit: BoxFit.cover),
-              ),
-            ),
-          );
-        },
-        style: TextButton.styleFrom(foregroundColor: Colors.white70),
-        icon: Icon(icon, size: 18),
-        label: Text(label),
-      ),
-    );
-  }
-}
-
-class _CaptureSummaryRow extends StatelessWidget {
-  final bool packagingDone;
-  final bool regDone;
-
-  const _CaptureSummaryRow({
-    required this.packagingDone,
-    required this.regDone,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Row(
-      children: [
-        _CaptureSummaryPill(
-          label: 'Packaging',
-          icon: Icons.inventory_2_rounded,
-          done: packagingDone,
-          theme: theme,
-        ),
-        const SizedBox(width: 8),
-        _CaptureSummaryPill(
-          label: 'Reg number',
-          icon: Icons.confirmation_number_rounded,
-          done: regDone,
-          theme: theme,
-        ),
-      ],
-    );
-  }
-}
-
-class _CaptureSummaryPill extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool done;
-  final ThemeData theme;
-
-  const _CaptureSummaryPill({
-    required this.label,
-    required this.icon,
-    required this.done,
-    required this.theme,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final Color color = done ? Colors.greenAccent : Colors.white70;
-    final Color fill = done
-        ? Colors.greenAccent.withAlpha(40)
-        : Colors.white.withAlpha(20);
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: fill,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: color.withAlpha(120)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 16, color: color),
-            const SizedBox(width: 6),
-            Text(
-              done ? '$label ✓' : '$label …',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: color,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
