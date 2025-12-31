@@ -83,9 +83,9 @@ flutter:
     - assets/cosmetic_product_notification.csv
     - assets/logo.png
     - assets/models/
-    - assets/labels_food.txt
+    - assets/medicine_labels.txt
+    - assets/supplements_labels.txt
     - assets/debug/
-    - assets/labels_medicine.txt
     - test_assets/packaging_eval/
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

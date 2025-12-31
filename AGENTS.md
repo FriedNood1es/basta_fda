@@ -33,7 +33,7 @@
 - Large datasets and models live in `assets/`; update hashes/version notes in code comments when replacing them so `FDAChecker.ensureLoadedAndFresh()` stays predictable.
 
 ## Packaging Model Notes
-- The packaging helper now expects `assets/labels_food.txt` to list each trained product class (e.g., `0 555_tuna_spicy`). Keep the order in sync with your dataset folders so the predicted label names are accurate.
+- Each packaging model ships with a matching label file in `assets/*_labels.txt` (e.g., `assets/supplements_labels.txt`, `assets/medicine_labels.txt`). Keep the order in sync with your dataset folders so the predicted label names are accurate.
 - `image_classifier.dart` uses those label names directly for `ImagePrediction.productName`, and authenticity is just the model confidence (suspicious % = 1 - authenticity). Ensure new models respect this convention before swapping in a new `.tflite`.
 
 ## Image Scan Flow

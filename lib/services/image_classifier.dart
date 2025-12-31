@@ -29,11 +29,11 @@ const Map<PackagingModelCategory, PackagingModelConfig> _modelConfigs = {
   ),
   PackagingModelCategory.supplements: PackagingModelConfig(
     modelAsset: 'assets/models/supplements_model.tflite',
-    labelAsset: 'assets/labels_supplements.txt',
+    labelAsset: 'assets/supplements_labels.txt',
   ),
   PackagingModelCategory.medicine: PackagingModelConfig(
     modelAsset: 'assets/models/medicine_model.tflite',
-    labelAsset: 'assets/labels_medicine.txt',
+    labelAsset: 'assets/medicine_labels.txt',
   ),
 };
 
@@ -295,9 +295,9 @@ class PackagingImageClassifier {
         _inputHeight,
         (y) => List.generate(_inputWidth, (x) {
           final pixel = resized.getPixel(x, y);
-          final r = pixel.rNormalized.toDouble();
-          final g = pixel.gNormalized.toDouble();
-          final b = pixel.bNormalized.toDouble();
+          final r = pixel.r.toDouble();
+          final g = pixel.g.toDouble();
+          final b = pixel.b.toDouble();
           if (channels <= 1) {
             final gray = (r + g + b) / 3;
             final buffer = Float32List(1);
@@ -305,7 +305,7 @@ class PackagingImageClassifier {
             return buffer;
           }
           final buffer = Float32List(channels);
-          final values = [r, g, b, pixel.aNormalized.toDouble()];
+          final values = [r, g, b, pixel.a.toDouble()];
           for (var i = 0; i < channels; i++) {
             buffer[i] = i < values.length ? values[i] : 0;
           }
