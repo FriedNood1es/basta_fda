@@ -25,7 +25,7 @@ const Map<PackagingModelCategory, PackagingModelConfig> _modelConfigs = {
   ),
   PackagingModelCategory.cosmetics: PackagingModelConfig(
     modelAsset: 'assets/models/cosmetics_model.tflite',
-    labelAsset: 'assets/labels_cosmetics.txt',
+    labelAsset: 'assets/cosmetics_labels.txt',
   ),
   PackagingModelCategory.supplements: PackagingModelConfig(
     modelAsset: 'assets/models/supplements_model.tflite',
@@ -567,9 +567,9 @@ class PackagingImageClassifier {
     final input = _convertToInput(decoded);
     final stats = _tensorStats(input);
     debugPrint(
-      'Input stats => min:' + stats.min.toStringAsFixed(4) +
-          ' max:' + stats.max.toStringAsFixed(4) +
-          ' avg:' + stats.mean.toStringAsFixed(4),
+      'Input stats => min:${stats.min.toStringAsFixed(4)} '
+      'max:${stats.max.toStringAsFixed(4)} '
+      'avg:${stats.mean.toStringAsFixed(4)}',
     );
     final classCount = _outputClassCount > 0
         ? _outputClassCount
@@ -585,14 +585,12 @@ class PackagingImageClassifier {
         List.generate(classCount, (i) => 'Class ${i + 1}');
     debugPrint('--- Label order ---');
     for (var i = 0; i < labels.length && i < probs.length; i++) {
-      debugPrint('[' + i.toString() + '] ' + labels[i] +
-          ' => ' + probs[i].toStringAsFixed(4));
+      debugPrint('[$i] ${labels[i]} => ${probs[i].toStringAsFixed(4)}');
     }
     final best = _argMax(probs);
     if (best >= 0 && best < labels.length) {
       debugPrint(
-        'Top class: ' + labels[best] +
-            ' (confidence ' + (probs[best] * 100).toStringAsFixed(2) + '%)',
+        'Top class: ${labels[best]} (confidence ${(probs[best] * 100).toStringAsFixed(2)}%)',
       );
     }
   }
@@ -618,14 +616,6 @@ class PackagingImageClassifier {
     return _TensorStats(min, max, mean);
   }
 
-  String? _describeUnsupportedOp(Object error) {
-    final message = error.toString().toLowerCase();
-    if (message.contains('fully_connected') &&
-        message.contains("version '12'")) {
-      return 'FULLY_CONNECTED v12';
-    }
-    return null;
-  }
 }
 
 class _TensorStats {

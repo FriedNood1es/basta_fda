@@ -503,6 +503,43 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     final status = widget.status;
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
+
+    Widget verdictInfoRow({
+      required IconData icon,
+      required Color color,
+      required String title,
+      required String body,
+    }) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: color, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    body,
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     final imageInfo = _imageResult.info;
     final imageVerdict = imageInfo?['verdict'] ?? '';
     final confirmedRegRaw = widget.confirmedRegNumber?.trim();
@@ -546,6 +583,14 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     final imageCategory = imageInfo?['category'] ?? '';
     final imageConfidence = imageInfo?['confidence'] ?? '';
     final imageSource = imageInfo?['source'] ?? '';
+    final matchReason = (productInfo['match_reason'] ?? '').toString().trim();
+    final verificationReason =
+        (productInfo['verification_reasons'] ?? '').toString().trim();
+    final bool showVerdictCard =
+        matchReason.isNotEmpty || verificationReason.isNotEmpty;
+    final verdictLabel = imageVerdict.isNotEmpty
+        ? _titleCase(imageVerdict)
+        : _imageResult.status.label;
     final String? packagingPath = widget.packagingImagePath;
     final hasPackagingPhoto = _packagingFileExists(packagingPath);
     final Widget? packagingPreview = hasPackagingPhoto && packagingPath != null
@@ -592,6 +637,12 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
       }
       return null;
     }();
+
+    final bool hasPackagingDetails = packagingSection != null &&
+        (imageProduct.isNotEmpty ||
+            imageCategory.isNotEmpty ||
+            imageConfidence.isNotEmpty ||
+            imageSource.isNotEmpty);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Scan Result')),
@@ -693,6 +744,40 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
               if (packagingSection != null) packagingSection,
             ],
 
+            if (hasPackagingDetails) ...[
+              const SizedBox(height: 12),
+              const _SectionHeader(label: 'Packaging helper details'),
+              const SizedBox(height: 8),
+              Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: ListTile(
+                  leading: const Icon(Icons.image_search_rounded),
+                  title: Text(
+                    imageProduct.isNotEmpty
+                        ? imageProduct
+                        : 'Image model preview',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (imageVerdict.isNotEmpty)
+                        Text('Verdict: ${_titleCase(imageVerdict)}'),
+                      if (imageCategory.isNotEmpty)
+                        Text('Category: ${_titleCase(imageCategory)}'),
+                      if (imageConfidence.isNotEmpty)
+                        Text('Confidence: $imageConfidence'),
+                      if (imageSource.isNotEmpty) Text('Source: $imageSource'),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
             if (_imageResult.status.needsWarning) ...[
               const SizedBox(height: 8),
               Card(
@@ -725,35 +810,15 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
             const SizedBox(height: 16),
 
-            const _SectionHeader(label: 'Quick actions'),
+            const _SectionHeader(label: 'Share scan'),
             const SizedBox(height: 8),
-            // Actions
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: copyableRegNumber == null
-                        ? null
-                        : () => _copyRegNumber(copyableRegNumber),
-
-                    icon: const Icon(Icons.copy_rounded, size: 18),
-
-                    label: const Text('Copy Reg No'),
-                  ),
-                ),
-
-                const SizedBox(width: 12),
-
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _shareScanSummary,
-
-                    icon: const Icon(Icons.share_rounded, size: 18),
-
-                    label: const Text('Share'),
-                  ),
-                ),
-              ],
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _shareScanSummary,
+                icon: const Icon(Icons.share_rounded, size: 18),
+                label: const Text('Share scan'),
+              ),
             ),
 
             const SizedBox(height: 16),
@@ -835,148 +900,66 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
               ),
             ),
 
-            const SizedBox(height: 20),
-
-            if (imageProduct.isNotEmpty ||
-                imageCategory.isNotEmpty ||
-                imageConfidence.isNotEmpty ||
-                imageSource.isNotEmpty) ...[
+            if (showVerdictCard && !hasPackagingDetails) ...[
               const SizedBox(height: 20),
-              const _SectionHeader(label: 'Packaging helper details'),
-              const SizedBox(height: 8),
               Card(
                 elevation: 0,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                child: ListTile(
-                  leading: const Icon(Icons.image_search_rounded),
-                  title: Text(
-                    imageProduct.isNotEmpty
-                        ? imageProduct
-                        : 'Image model preview',
-                    style: theme.textTheme.titleMedium,
-                  ),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (imageVerdict.isNotEmpty)
-                        Text('Verdict: ${_titleCase(imageVerdict)}'),
-                      if (imageCategory.isNotEmpty)
-                        Text('Category: ${_titleCase(imageCategory)}'),
-                      if (imageConfidence.isNotEmpty)
-                        Text('Confidence: $imageConfidence'),
-                      if (imageSource.isNotEmpty) Text('Source: $imageSource'),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-            ],
-
-            // Why it matched (if available)
-            if ((productInfo['match_reason'] ?? '').isNotEmpty) ...[
-              const _SectionHeader(label: 'Why it matched'),
-              const SizedBox(height: 8),
-              Card(
-                elevation: 0,
-
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 18,
-                  ),
-
-                  child: Row(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-
                     children: [
-                      Icon(
-                        Icons.info_outline_rounded,
-
-                        color: theme.colorScheme.primary,
-                      ),
-
-                      const SizedBox(width: 10),
-
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-
-                          children: [
-                            Text(
-                              'Why this matched',
-
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            imageVerdict == 'suspicious'
+                                ? Icons.warning_rounded
+                                : Icons.verified_rounded,
+                            color: imageColor,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Scan verdict',
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Image verdict: $verdictLabel | Registration: ${widget.registrationStatus.label}',
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                              ],
                             ),
-
-                            const SizedBox(height: 6),
-
-                            Text(productInfo['match_reason'] ?? ''),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
+                      if (matchReason.isNotEmpty)
+                        verdictInfoRow(
+                          icon: Icons.task_alt_rounded,
+                          color: theme.colorScheme.primary,
+                          title: 'Why this matched',
+                          body: matchReason,
+                        ),
+                      if (verificationReason.isNotEmpty)
+                        verdictInfoRow(
+                          icon: Icons.warning_amber_rounded,
+                          color: sColor,
+                          title: 'Why this status',
+                          body: verificationReason,
+                        ),
                     ],
                   ),
                 ),
               ),
-
-              const SizedBox(height: 20),
-            ],
-
-            // Why this status (e.g., EXPIRED or UNRECOGNIZED)
-            if ((productInfo['verification_reasons'] ?? '').isNotEmpty) ...[
-              const _SectionHeader(label: 'Why this status'),
-              const SizedBox(height: 8),
-              Card(
-                elevation: 0,
-
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-
-                    children: [
-                      Icon(Icons.warning_amber_rounded, color: sColor),
-
-                      const SizedBox(width: 10),
-
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-
-                          children: [
-                            Text(
-                              'Why this status',
-
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-
-                            const SizedBox(height: 6),
-
-                            Text(productInfo['verification_reasons'] ?? ''),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 20),
             ],
 
             const SizedBox(height: 20),
@@ -1046,74 +1029,74 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
             const _SectionHeader(label: 'Take action'),
             const SizedBox(height: 8),
-            // Report button
-            SizedBox(
-              width: double.infinity,
-
-              child: ElevatedButton.icon(
-                onPressed: () async {
-                  await showModalBottomSheet(
-                    context: context,
-
-                    isScrollControlled: true,
-
-                    shape: const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.vertical(
-                        top: Radius.circular(16),
-                      ),
-                    ),
-
-                    builder: (ctx) => _ReportProductSheet(
-                      productInfo: productInfo,
-
-                      status: status,
-                      registrationStatus: widget.registrationStatus,
-                      imageStatus: _imageResult.status,
-                      imageInfo: _imageResult.info,
-                      confirmedRegNumber: widget.confirmedRegNumber,
-                    ),
-                  );
-                },
-
-                icon: const Icon(Icons.report_gmailerrorred_rounded),
-
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.redAccent,
-
-                  foregroundColor: Colors.white,
-
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-
-                    vertical: 14,
-                  ),
-
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-
-                label: const Text('Report Suspicious Product'),
-              ),
-            ),
-
-            const SizedBox(height: 12),
-
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                OutlinedButton.icon(
-                  onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.qr_code_scanner_rounded),
-                  label: const Text('Scan another product'),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () async {
+                      await showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        shape: const RoundedRectangleBorder(
+                          borderRadius: BorderRadius.vertical(
+                            top: Radius.circular(16),
+                          ),
+                        ),
+                        builder: (ctx) => _ReportProductSheet(
+                          productInfo: productInfo,
+                          status: status,
+                          registrationStatus: widget.registrationStatus,
+                          imageStatus: _imageResult.status,
+                          imageInfo: _imageResult.info,
+                          confirmedRegNumber: widget.confirmedRegNumber,
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.report_gmailerrorred_rounded),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 14,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    label: const Text('Report Suspicious Product'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    label: const Text('Scan another product'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      side: BorderSide(color: theme.colorScheme.outline),
+                      backgroundColor: theme.colorScheme.surfaceVariant,
+                      foregroundColor: theme.colorScheme.onSurface,
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 8),
-                TextButton.icon(
-                  onPressed: () => Navigator.of(
-                    context,
-                  ).pop(ScanResultScreen.viewHistoryResult),
-                  icon: const Icon(Icons.history_rounded),
-                  label: const Text('View scan history'),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => Navigator.of(
+                      context,
+                    ).pop(ScanResultScreen.viewHistoryResult),
+                    icon: const Icon(Icons.history_rounded),
+                    label: const Text('View scan history'),
+                  ),
                 ),
               ],
             ),
@@ -1220,6 +1203,51 @@ class _PackagingConfidenceCard extends StatelessWidget {
             ? 'Packaging helper'
             : '$trimmedName packaging helper';
 
+    Widget buildPoint(IconData icon, Color color, String text,
+        {TextStyle? style}) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, size: 18, color: color),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                text,
+                style: style ?? theme.textTheme.bodyMedium,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final Widget statusChip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: descriptor.color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        descriptor.title,
+        style: theme.textTheme.labelLarge?.copyWith(
+          fontWeight: FontWeight.w700,
+          color: descriptor.color,
+        ),
+      ),
+    );
+
+    final IconData advisoryIcon = highlightSuspicious
+        ? Icons.report_problem_rounded
+        : Icons.visibility_rounded;
+    final Color advisoryColor = highlightSuspicious
+        ? theme.colorScheme.error
+        : theme.colorScheme.onSurfaceVariant;
+    final TextStyle? guidanceStyle = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+    );
+
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
@@ -1242,28 +1270,34 @@ class _PackagingConfidenceCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            Text(
-              descriptor.title,
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: descriptor.color,
-              ),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                statusChip,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: indicators,
+                ),
+              ],
             ),
-            const SizedBox(height: 6),
-            Row(children: indicators),
-            const SizedBox(height: 12),
-            Text(
+            buildPoint(
+              Icons.verified_user_rounded,
+              descriptor.color,
               descriptor.detail,
-              style: theme.textTheme.bodyMedium,
             ),
-            const SizedBox(height: 8),
-            Text(note, style: theme.textTheme.bodySmall),
-            const SizedBox(height: 8),
-            Text(
+            buildPoint(
+              advisoryIcon,
+              advisoryColor,
+              note,
+              style: theme.textTheme.bodySmall,
+            ),
+            buildPoint(
+              Icons.assignment_turned_in_rounded,
+              theme.colorScheme.onSurfaceVariant,
               'Packaging helper guides you, but the FDA registration result is still the primary verdict.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-              ),
+              style: guidanceStyle,
             ),
           ],
         ),
