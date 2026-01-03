@@ -83,6 +83,7 @@ flutter:
     - assets/cosmetic_product_notification.csv
     - assets/logo.png
     - assets/models/
+    - assets/food_labels.txt
     - assets/cosmetics_labels.txt
     - assets/medicine_labels.txt
     - assets/supplements_labels.txt

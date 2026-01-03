@@ -28,7 +28,6 @@ class ScanResultScreen extends StatefulWidget {
   final Future<ImageCheckResult>? imageResultFuture;
   final String? confirmedRegNumber;
   final String? packagingImagePath;
-  final bool isImageTrainedProduct;
 
   const ScanResultScreen({
     super.key,
@@ -39,7 +38,6 @@ class ScanResultScreen extends StatefulWidget {
     this.imageResultFuture,
     this.confirmedRegNumber,
     this.packagingImagePath,
-    this.isImageTrainedProduct = false,
   });
 
   @override
@@ -67,7 +65,6 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
   }
 
   Map<String, double> _imageConfidenceBreakdown() {
-    if (!widget.isImageTrainedProduct) return const {};
     final info = _imageResult.info;
     if (info == null || info.isEmpty) return const {};
     double parseScore(String key) {
@@ -94,10 +91,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
   }
 
   void _maybeShowSuspiciousAlert() {
-    if (!mounted ||
-        _alertShown ||
-        !widget.isImageTrainedProduct ||
-        _imageResult.info == null) {
+    if (!mounted || _alertShown || _imageResult.info == null) {
       return;
     }
     final breakdown = _imageConfidenceBreakdown();
@@ -528,10 +522,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  Text(
-                    body,
-                    style: theme.textTheme.bodySmall,
-                  ),
+                  Text(body, style: theme.textTheme.bodySmall),
                 ],
               ),
             ),
@@ -552,10 +543,18 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
               : null);
     final regNoLabel = copyableRegNumber?.toUpperCase() ?? 'N/A';
     final sColor = statusColor(status, theme);
-    final registrationColor =
-        widget.registrationStatus == RegistrationStatus.registered
-        ? Colors.green.shade600
-        : theme.colorScheme.error;
+    final Color registrationColor;
+    switch (widget.registrationStatus) {
+      case RegistrationStatus.registered:
+        registrationColor = Colors.green.shade600;
+        break;
+      case RegistrationStatus.unregistered:
+        registrationColor = theme.colorScheme.error;
+        break;
+      case RegistrationStatus.skipped:
+        registrationColor = theme.colorScheme.outline;
+        break;
+    }
     final imageChipValue = imageVerdict == 'suspicious'
         ? 'Suspicious'
         : _imageResult.status.label;
@@ -584,8 +583,9 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     final imageConfidence = imageInfo?['confidence'] ?? '';
     final imageSource = imageInfo?['source'] ?? '';
     final matchReason = (productInfo['match_reason'] ?? '').toString().trim();
-    final verificationReason =
-        (productInfo['verification_reasons'] ?? '').toString().trim();
+    final verificationReason = (productInfo['verification_reasons'] ?? '')
+        .toString()
+        .trim();
     final bool showVerdictCard =
         matchReason.isNotEmpty || verificationReason.isNotEmpty;
     final verdictLabel = imageVerdict.isNotEmpty
@@ -602,43 +602,50 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
     final Widget? packagingSection = () {
       final breakdown = _imageConfidenceBreakdown();
-      if (widget.isImageTrainedProduct) {
-        if (breakdown.isNotEmpty) {
-          return _PackagingConfidenceCard(
-            authenticScore: breakdown['authentic'] ?? 0,
-            suspiciousScore: breakdown['suspicious'] ?? 0,
-            productName: _titleCase(productInfo['brand_name']),
-          );
-        }
-        if (_imageResult.status == ImageCheckStatus.pending) {
+      if (breakdown.isNotEmpty) {
+        return _PackagingConfidenceCard(
+          authenticScore: breakdown['authentic'] ?? 0,
+          suspiciousScore: breakdown['suspicious'] ?? 0,
+          productName: _titleCase(productInfo['brand_name']),
+        );
+      }
+
+      switch (_imageResult.status) {
+        case ImageCheckStatus.pending:
           return const _InfoBanner(
             icon: Icons.hourglass_top_rounded,
             title: 'Packaging check in progress',
             message:
                 'We are comparing your photo to our reference images. Results will appear shortly.',
           );
-        }
-        if (_imageResult.status == ImageCheckStatus.skipped ||
-            _imageResult.status == ImageCheckStatus.failed) {
+        case ImageCheckStatus.skipped:
           return const _InfoBanner(
             icon: Icons.image_not_supported_rounded,
             title: 'Packaging check unavailable',
             message:
                 'This scan did not include a usable packaging photo. Verification relies on the registration number.',
           );
-        }
-      } else {
-        return const _InfoBanner(
-          icon: Icons.inventory_2_outlined,
-          title: 'Packaging reference not available',
-          message:
-              'We matched the registration record, but this SKU is not yet part of our packaging training set.',
-        );
+        case ImageCheckStatus.failed:
+          return const _InfoBanner(
+            icon: Icons.error_outline_rounded,
+            title: 'Packaging check failed',
+            message:
+                'Something went wrong while running the packaging helper. Retake the photo and try again.',
+          );
+        case ImageCheckStatus.unrecognized:
+          return const _InfoBanner(
+            icon: Icons.help_outline_rounded,
+            title: 'Packaging not recognized',
+            message:
+                'We could not match the packaging photo to our reference models yet.',
+          );
+        case ImageCheckStatus.recognized:
+          return null;
       }
-      return null;
     }();
 
-    final bool hasPackagingDetails = packagingSection != null &&
+    final bool hasPackagingDetails =
+        packagingSection != null &&
         (imageProduct.isNotEmpty ||
             imageCategory.isNotEmpty ||
             imageConfidence.isNotEmpty ||
@@ -908,7 +915,10 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 18,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1082,7 +1092,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                         borderRadius: BorderRadius.circular(14),
                       ),
                       side: BorderSide(color: theme.colorScheme.outline),
-                      backgroundColor: theme.colorScheme.surfaceVariant,
+                      backgroundColor:
+                          theme.colorScheme.surfaceContainerHighest,
                       foregroundColor: theme.colorScheme.onSurface,
                     ),
                   ),
@@ -1160,8 +1171,6 @@ class _PackagingPreviewCard extends StatelessWidget {
   }
 }
 
-
-
 class _PackagingConfidenceCard extends StatelessWidget {
   final double authenticScore;
   final double suspiciousScore;
@@ -1176,8 +1185,10 @@ class _PackagingConfidenceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final _ConfidenceDescriptor descriptor =
-        _ConfidenceDescriptor.fromScore(authenticScore, theme);
+    final _ConfidenceDescriptor descriptor = _ConfidenceDescriptor.fromScore(
+      authenticScore,
+      theme,
+    );
     final indicators = List<Widget>.generate(3, (index) {
       final filled = index < descriptor.level;
       return Padding(
@@ -1198,13 +1209,16 @@ class _PackagingConfidenceCard extends StatelessWidget {
         : 'No strong suspicious cues surfaced in this capture. Still trust your instincts and inspect seals or labels if anything feels off.';
 
     final trimmedName = productName.trim();
-    final String nameLabel =
-        trimmedName.isEmpty || trimmedName == 'N/A'
-            ? 'Packaging helper'
-            : '$trimmedName packaging helper';
+    final String nameLabel = trimmedName.isEmpty || trimmedName == 'N/A'
+        ? 'Packaging helper'
+        : '$trimmedName packaging helper';
 
-    Widget buildPoint(IconData icon, Color color, String text,
-        {TextStyle? style}) {
+    Widget buildPoint(
+      IconData icon,
+      Color color,
+      String text, {
+      TextStyle? style,
+    }) {
       return Padding(
         padding: const EdgeInsets.only(top: 8),
         child: Row(
@@ -1213,10 +1227,7 @@ class _PackagingConfidenceCard extends StatelessWidget {
             Icon(icon, size: 18, color: color),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                text,
-                style: style ?? theme.textTheme.bodyMedium,
-              ),
+              child: Text(text, style: style ?? theme.textTheme.bodyMedium),
             ),
           ],
         ),
@@ -1276,10 +1287,7 @@ class _PackagingConfidenceCard extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 statusChip,
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: indicators,
-                ),
+                Row(mainAxisSize: MainAxisSize.min, children: indicators),
               ],
             ),
             buildPoint(
@@ -1336,19 +1344,27 @@ class _ConfidenceDescriptor {
         title: '✔✔ Moderate match',
         detail:
             'Model saw some familiar details, but lighting or framing might need improvement.',
-        color: Colors.amber.shade800,
+        color: Colors.amber.shade500,
+      );
+    }
+    if (normalized >= 0.2) {
+      return _ConfidenceDescriptor(
+        level: 1,
+        title: '✔ Low match',
+        detail:
+            'Model struggled to recognize this capture. Retake a clearer wide shot before trusting the packaging.',
+        color: Colors.orange.shade500,
       );
     }
     return _ConfidenceDescriptor(
-      level: 1,
-      title: '✔ Weak match',
+      level: 0,
+      title: '⚠ Critical match',
       detail:
-          'Model struggled to recognize this capture. Retake a clearer wide shot before trusting the packaging.',
-      color: theme.hintColor,
+          'Confidence is extremely low. Treat this as suspicious and rely on another verification step.',
+      color: theme.colorScheme.error,
     );
   }
 }
-
 
 class _InfoBanner extends StatelessWidget {
   final IconData icon;

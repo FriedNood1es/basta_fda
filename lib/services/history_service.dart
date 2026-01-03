@@ -12,7 +12,6 @@ class HistoryEntry {
   final RegistrationStatus registrationStatus;
   final ImageCheckStatus imageStatus;
   final String? regNumber;
-  final bool imageTrainedProduct;
   final String? packagingImagePath;
 
   HistoryEntry({
@@ -24,22 +23,20 @@ class HistoryEntry {
     required this.registrationStatus,
     required this.imageStatus,
     this.regNumber,
-    this.imageTrainedProduct = false,
     this.packagingImagePath,
   });
 
   Map<String, dynamic> toJson() => {
-        'timestamp': timestamp.toIso8601String(),
-        'scannedText': scannedText,
-        'productInfo': productInfo,
-        'status': status,
-        'imageInfo': imageInfo,
-        'registrationStatus': registrationStatus.name,
-        'imageStatus': imageStatus.name,
-        'regNumber': regNumber,
-        'imageTrainedProduct': imageTrainedProduct,
-        'packagingImagePath': packagingImagePath,
-      };
+    'timestamp': timestamp.toIso8601String(),
+    'scannedText': scannedText,
+    'productInfo': productInfo,
+    'status': status,
+    'imageInfo': imageInfo,
+    'registrationStatus': registrationStatus.name,
+    'imageStatus': imageStatus.name,
+    'regNumber': regNumber,
+    'packagingImagePath': packagingImagePath,
+  };
 
   static HistoryEntry fromJson(Map<String, dynamic> json) {
     RegistrationStatus parseReg(String? raw, Map<String, String>? product) {
@@ -70,10 +67,8 @@ class HistoryEntry {
       );
     }
 
-    final product =
-        (json['productInfo'] as Map?)?.cast<String, String>();
-    final imageInfo =
-        (json['imageInfo'] as Map?)?.cast<String, String>();
+    final product = (json['productInfo'] as Map?)?.cast<String, String>();
+    final imageInfo = (json['imageInfo'] as Map?)?.cast<String, String>();
     return HistoryEntry(
       timestamp: DateTime.parse(json['timestamp'] as String),
       scannedText: (json['scannedText'] ?? '') as String,
@@ -93,7 +88,6 @@ class HistoryEntry {
         }
         return null;
       })(),
-      imageTrainedProduct: json['imageTrainedProduct'] == true,
       packagingImagePath: (() {
         final raw = json['packagingImagePath'];
         if (raw is String) {
@@ -160,7 +154,10 @@ class HistoryService {
       }
       if (await f.exists()) {
         final raw = await f.readAsString();
-        final list = (jsonDecode(raw) as List).cast<Map>().map((m) => HistoryEntry.fromJson(m.cast<String, dynamic>())).toList();
+        final list = (jsonDecode(raw) as List)
+            .cast<Map>()
+            .map((m) => HistoryEntry.fromJson(m.cast<String, dynamic>()))
+            .toList();
         _entries
           ..clear()
           ..addAll(list);
@@ -201,7 +198,6 @@ class HistoryService {
     required RegistrationStatus registrationStatus,
     required ImageCheckStatus imageStatus,
     String? regNumber,
-    bool imageTrainedProduct = false,
     String? packagingImagePath,
   }) async {
     await load();
@@ -215,7 +211,6 @@ class HistoryService {
         registrationStatus: registrationStatus,
         imageStatus: imageStatus,
         regNumber: regNumber,
-        imageTrainedProduct: imageTrainedProduct,
         packagingImagePath: packagingImagePath,
       ),
     );
@@ -247,6 +242,3 @@ class HistoryService {
     }
   }
 }
-
-
-

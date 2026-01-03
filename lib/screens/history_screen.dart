@@ -53,10 +53,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       context: context,
                       builder: (_) => AlertDialog(
                         title: const Text('Clear history?'),
-                        content: const Text('This will remove all saved scans.'),
+                        content: const Text(
+                          'This will remove all saved scans.',
+                        ),
                         actions: [
-                          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Clear')),
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('Cancel'),
+                          ),
+                          ElevatedButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            child: const Text('Clear'),
+                          ),
                         ],
                       ),
                     );
@@ -65,7 +73,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       if (mounted) setState(() {});
                     }
                   },
-          )
+          ),
         ],
       ),
       body: items.isEmpty
@@ -83,17 +91,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 final title = brand != null && brand.isNotEmpty
                     ? brand
                     : (imageLabel != null && imageLabel.isNotEmpty
-                        ? '[Image] $imageLabel'
-                        : e.scannedText);
+                          ? '[Image] $imageLabel'
+                          : e.scannedText);
                 String two(int n) => n.toString().padLeft(2, '0');
                 final t = e.timestamp.toLocal();
-                final ts = '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
-                final packagingTag =
-                    e.imageTrainedProduct ? ' • Packaging-trained' : '';
+                final ts =
+                    '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
                 return ListTile(
                   title: Text(title),
                   subtitle: Text(
-                    '${e.registrationStatus.label} | Image $imageStatusLabel$packagingTag - $ts',
+                    '${e.registrationStatus.label} | Image $imageStatusLabel - $ts',
                   ),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () {
@@ -111,7 +118,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                             ),
                             imageResultFuture: null,
                             confirmedRegNumber: e.regNumber,
-                            isImageTrainedProduct: e.imageTrainedProduct,
                             packagingImagePath: e.packagingImagePath,
                           ),
                         ),

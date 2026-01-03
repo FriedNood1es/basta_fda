@@ -8,7 +8,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:basta_fda/services/history_service.dart';
 import 'package:basta_fda/services/image_classifier.dart';
-import 'package:basta_fda/data/packaging_trained_products.dart';
 
 class SettingsScreen extends StatefulWidget {
   final FDAChecker fdaChecker;
@@ -173,14 +172,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 ListTile(
-                  leading: const Icon(Icons.inventory_2_outlined),
-                  title: const Text('Packaging coverage (trained list)'),
-                  subtitle: const Text(
-                    'See products with packaging helper support',
-                  ),
-                  onTap: () => _showPackagingCoverageSheet(context),
-                ),
-                ListTile(
                   leading: const Icon(Icons.tune_rounded),
                   title: const Text('Packaging authenticity threshold'),
                   subtitle: Column(
@@ -311,91 +302,4 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
     );
   }
-}
-
-void _showPackagingCoverageSheet(BuildContext context) {
-  final grouped = PackagingCoverage.byCategory();
-  showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
-    builder: (ctx) {
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.inventory_2_outlined),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Packaging coverage',
-                      style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'These products have trained packaging references. The list only appears here to keep the scanner uncluttered.',
-              ),
-              const SizedBox(height: 12),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: grouped.keys.length,
-                  itemBuilder: (ctx, idx) {
-                    final category = grouped.keys.elementAt(idx);
-                    final items = grouped[category] ?? [];
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            category,
-                            style: Theme.of(ctx).textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          ...items.map(
-                            (p) => Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 2),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.check_circle_outline,
-                                    size: 16,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Expanded(child: Text(p.name)),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    },
-  );
 }

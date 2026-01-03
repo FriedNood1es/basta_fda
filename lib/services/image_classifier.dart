@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
-import 'package:basta_fda/data/packaging_trained_products.dart';
 
 enum PackagingModelCategory { food, cosmetics, supplements, medicine }
 
@@ -21,7 +20,7 @@ class PackagingModelConfig {
 const Map<PackagingModelCategory, PackagingModelConfig> _modelConfigs = {
   PackagingModelCategory.food: PackagingModelConfig(
     modelAsset: 'assets/models/food_model.tflite',
-    labelAsset: 'assets/labels_food.txt',
+    labelAsset: 'assets/food_labels.txt',
   ),
   PackagingModelCategory.cosmetics: PackagingModelConfig(
     modelAsset: 'assets/models/cosmetics_model.tflite',
@@ -121,9 +120,7 @@ class PackagingImageClassifier {
         interpreter = await Interpreter.fromAsset(config.modelAsset);
         debugPrint('Loaded packaging model: ${config.modelAsset}');
       } catch (e, stack) {
-        debugPrint(
-          'Failed to load packaging model ${config.modelAsset}: $e',
-        );
+        debugPrint('Failed to load packaging model ${config.modelAsset}: $e');
         debugPrint('$stack');
         rethrow;
       }
@@ -186,8 +183,6 @@ class PackagingImageClassifier {
     PackagingModelCategory category = PackagingModelCategory.food,
     List<String>? framePaths,
   }) async {
-    final normalized = _normalizeText(rawText, additionalText);
-
     await _ensureLoaded(category);
 
     if (_loadedModelAsset != null && imagePath != null) {
@@ -197,14 +192,14 @@ class PackagingImageClassifier {
     final frames = _prepareFrameBatch(imagePath, framePaths);
 
     if (_interpreter == null || frames.isEmpty) {
-      return _classifyFromText(normalized);
+      return null;
     }
 
     final classCount = _outputClassCount > 0
         ? _outputClassCount
         : (_labels?.length ?? 0);
     if (classCount <= 0) {
-      return _classifyFromText(normalized);
+      return null;
     }
 
     try {
@@ -222,8 +217,8 @@ class PackagingImageClassifier {
       }
 
       if (processedFrames == 0) {
-        debugPrint('Packaging helper: no usable frames, falling back to text');
-        return _classifyFromText(normalized);
+        debugPrint('Packaging helper: no usable frames for classification.');
+        return null;
       }
 
       final averaged = aggregated
@@ -235,12 +230,12 @@ class PackagingImageClassifier {
 
       final bestIndex = _argMax(averaged);
       if (bestIndex < 0) {
-        return _classifyFromText(normalized);
+        return null;
       }
       final confidence = averaged[bestIndex];
       if (confidence.isNaN || confidence < _absoluteMinConfidence) {
         debugPrint('Packaging helper: confidence below absolute minimum');
-        return _classifyFromText(normalized);
+        return null;
       }
 
       final labelInfo = _labelInfoForIndex(bestIndex);
@@ -256,16 +251,6 @@ class PackagingImageClassifier {
         'Packaging final => $productName | confidence ${(authenticity * 100).toStringAsFixed(1)}% (threshold ${(_suspiciousThreshold * 100).toStringAsFixed(0)}%)',
       );
 
-      if (authenticity < _suspiciousThreshold) {
-        final heuristic = _classifyFromText(normalized);
-        if (heuristic != null) {
-          debugPrint(
-            'Packaging helper falling back to text heuristic due to low authenticity',
-          );
-          return heuristic;
-        }
-      }
-
       return ImagePrediction(
         category: categoryLabel,
         productName: productName,
@@ -278,7 +263,7 @@ class PackagingImageClassifier {
     } catch (e, stack) {
       debugPrint('Image classification error: $e');
       debugPrint('$stack');
-      return _classifyFromText(normalized);
+      return null;
     }
   }
 
@@ -409,71 +394,6 @@ class PackagingImageClassifier {
     return expValues.map((value) => value / sum).toList();
   }
 
-  ImagePrediction? _classifyFromText(String normalized) {
-    for (final sample in PackagingCoverage.products) {
-      if (sample.matchesNormalizedText(normalized)) {
-        return ImagePrediction(
-          category: _titleCase(sample.category),
-          productName: sample.name,
-          confidence: 0.92,
-          source: 'text-heuristic',
-          verdict: null,
-        );
-      }
-    }
-
-    if (normalized.contains('tablet') || normalized.contains('capsule')) {
-      return ImagePrediction(
-        category: 'Medicine',
-        productName: 'Unrecognized tablet',
-        confidence: 0.55,
-        source: 'text-heuristic',
-        verdict: null,
-      );
-    }
-    if (normalized.contains('vitamin') || normalized.contains('supplement')) {
-      return ImagePrediction(
-        category: 'Supplement',
-        productName: 'Unrecognized supplement',
-        confidence: 0.6,
-        source: 'text-heuristic',
-        verdict: null,
-      );
-    }
-    if (normalized.contains('cream') ||
-        normalized.contains('lotion') ||
-        normalized.contains('facial')) {
-      return ImagePrediction(
-        category: 'Cosmetic',
-        productName: 'Unrecognized cosmetic',
-        confidence: 0.58,
-        source: 'text-heuristic',
-        verdict: null,
-      );
-    }
-    if (normalized.contains('drink') ||
-        normalized.contains('snack') ||
-        normalized.contains('chocolate')) {
-      return ImagePrediction(
-        category: 'Food',
-        productName: 'Unrecognized food item',
-        confidence: 0.52,
-        source: 'text-heuristic',
-        verdict: null,
-      );
-    }
-    return null;
-  }
-
-  String _normalizeText(String raw, String? additional) {
-    final buffer = StringBuffer(raw.toLowerCase());
-    if (additional != null && additional.isNotEmpty) {
-      buffer.write(' ');
-      buffer.write(additional.toLowerCase());
-    }
-    return buffer.toString();
-  }
-
   int _argMax(List<double> values) {
     var bestScore = double.negativeInfinity;
     var bestIndex = -1;
@@ -581,8 +501,8 @@ class PackagingImageClassifier {
     final output = List.generate(1, (_) => List<double>.filled(classCount, 0));
     _interpreter!.run(input, output);
     final probs = _calibrateProbabilities(output.first);
-    final labels = _labels ??
-        List.generate(classCount, (i) => 'Class ${i + 1}');
+    final labels =
+        _labels ?? List.generate(classCount, (i) => 'Class ${i + 1}');
     debugPrint('--- Label order ---');
     for (var i = 0; i < labels.length && i < probs.length; i++) {
       debugPrint('[$i] ${labels[i]} => ${probs[i].toStringAsFixed(4)}');
@@ -615,7 +535,6 @@ class PackagingImageClassifier {
     final double mean = count == 0 ? 0.0 : sum / count;
     return _TensorStats(min, max, mean);
   }
-
 }
 
 class _TensorStats {

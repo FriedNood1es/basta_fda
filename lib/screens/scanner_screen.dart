@@ -2,8 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'dart:io';
-import 'package:flutter/services.dart'
-    show HapticFeedback;
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:basta_fda/models/scan_verdict.dart';
@@ -15,7 +14,6 @@ import 'package:basta_fda/services/history_service.dart';
 import 'package:basta_fda/services/image_classifier.dart';
 import 'package:basta_fda/services/settings_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:basta_fda/data/packaging_trained_products.dart';
 import 'package:image/image.dart' as img;
 
 class ScannerScreen extends StatefulWidget {
@@ -351,7 +349,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _pendingRegCapture = false;
       _activeCaptureStep = _CaptureStep.packaging;
       _packagingImagePath = null;
-        _regSelectionPending = false;
+      _regSelectionPending = false;
       _pendingRegText = null;
       _pendingRegRaw = null;
       _confirmedRegNumber = null;
@@ -1008,13 +1006,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
       late final Future<ImageCheckResult> imageResultFuture;
       late final ImageCheckResult initialImageResult;
       Map<String, String>? nonNullProduct;
-      bool isImageTrainedProduct = false;
 
       if (matchedProduct != null) {
         nonNullProduct = Map<String, String>.from(matchedProduct);
-        isImageTrainedProduct = PackagingCoverage.matchesProduct(
-          nonNullProduct,
-        );
 
         if (skipImageCheck) {
           imageResultFuture = Future.value(
@@ -1022,13 +1016,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
           );
           initialImageResult = const ImageCheckResult(
             status: ImageCheckStatus.skipped,
-          );
-        } else if (!isImageTrainedProduct) {
-          imageResultFuture = Future.value(
-            const ImageCheckResult(status: ImageCheckStatus.unrecognized),
-          );
-          initialImageResult = const ImageCheckResult(
-            status: ImageCheckStatus.unrecognized,
           );
         } else {
           imageResultFuture = resolveImageCheck(raw);
@@ -1086,12 +1073,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   ),
                 ),
                 actions: [
-          if (kDebugMode)
-            IconButton(
-              tooltip: 'Log debug asset',
-              icon: const Icon(Icons.bug_report_outlined),
-              onPressed: _runDebugAssetProbe,
-            ),
+                  if (kDebugMode)
+                    IconButton(
+                      tooltip: 'Log debug asset',
+                      icon: const Icon(Icons.bug_report_outlined),
+                      onPressed: _runDebugAssetProbe,
+                    ),
                   TextButton(
                     onPressed: () => Navigator.of(ctx).pop(),
                     child: const Text('View Details'),
@@ -1115,7 +1102,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
               registrationStatus: registrationStatus,
               imageStatus: imageResult.status,
               regNumber: _confirmedRegNumber,
-              imageTrainedProduct: isImageTrainedProduct,
               packagingImagePath: capturedPackagingPath,
             );
           }),
@@ -1133,7 +1119,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
               imageResultFuture: imageResultFuture,
               confirmedRegNumber: _confirmedRegNumber,
               packagingImagePath: capturedPackagingPath,
-              isImageTrainedProduct: isImageTrainedProduct,
             ),
           ),
         );
@@ -1163,6 +1148,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
         final imageResult = await imageResultFuture;
         final imageRecognized =
             imageResult.status == ImageCheckStatus.recognized;
+        final registrationStatus = _regCaptureSkipped
+            ? RegistrationStatus.skipped
+            : RegistrationStatus.unregistered;
 
         if (imageRecognized) {
           final info = imageResult.info ?? {};
@@ -1188,10 +1176,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
             productInfo: pseudoProduct,
             status: 'IMAGE_ONLY',
             imageInfo: info,
-            registrationStatus: RegistrationStatus.unregistered,
+            registrationStatus: registrationStatus,
             imageStatus: imageResult.status,
             regNumber: _confirmedRegNumber,
-            imageTrainedProduct: true,
             packagingImagePath: capturedPackagingPath,
           );
           if (!mounted) return;
@@ -1201,12 +1188,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
               builder: (context) => ScanResultScreen(
                 productInfo: pseudoProduct,
                 status: 'IMAGE_ONLY',
-                registrationStatus: RegistrationStatus.unregistered,
+                registrationStatus: registrationStatus,
                 initialImageResult: imageResult,
                 imageResultFuture: null,
                 confirmedRegNumber: _confirmedRegNumber,
                 packagingImagePath: capturedPackagingPath,
-                isImageTrainedProduct: true,
               ),
             ),
           );
@@ -1218,7 +1204,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
             productInfo: null,
             status: 'NOT FOUND',
             imageInfo: imageResult.info,
-            registrationStatus: RegistrationStatus.unregistered,
+            registrationStatus: registrationStatus,
             imageStatus: imageResult.status,
             regNumber: _confirmedRegNumber,
             packagingImagePath: capturedPackagingPath,
@@ -1474,26 +1460,53 @@ class _ScannerScreenState extends State<ScannerScreen> {
     });
   }
 
-  Widget _buildStepTabs() {
+  Widget _buildStepTabs(BuildContext context) {
+    final theme = Theme.of(context);
     final bool regEnabled = _canUseRegStep;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+
+    Widget buildToggle(String label, _CaptureStep step, bool enabled) {
+      final bool selected = _activeCaptureStep == step;
+      return Expanded(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeInOut,
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          decoration: BoxDecoration(
+            color: selected ? Colors.white : Colors.transparent,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: TextButton(
+            onPressed: enabled ? () => _selectCaptureStep(step) : null,
+            style: TextButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+              ),
+              foregroundColor: selected ? Colors.black : Colors.white70,
+              padding: const EdgeInsets.symmetric(vertical: 10),
+            ),
+            child: Text(
+              label,
+              style: theme.textTheme.labelLarge?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.black : Colors.white,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white24),
+      ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          ChoiceChip(
-            label: const Text('Packaging'),
-            selected: _activeCaptureStep == _CaptureStep.packaging,
-            onSelected: (_) => _selectCaptureStep(_CaptureStep.packaging),
-          ),
-          const SizedBox(width: 8),
-          ChoiceChip(
-            label: const Text('Reg number'),
-            selected: _activeCaptureStep == _CaptureStep.regNumber,
-            onSelected: regEnabled
-                ? (_) => _selectCaptureStep(_CaptureStep.regNumber)
-                : null,
-          ),
+          buildToggle('Packaging', _CaptureStep.packaging, true),
+          buildToggle('Reg number', _CaptureStep.regNumber, regEnabled),
         ],
       ),
     );
@@ -1514,9 +1527,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Debug asset failed: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Debug asset failed: $e')));
     }
   }
 
@@ -1882,71 +1895,166 @@ class _ScannerScreenState extends State<ScannerScreen> {
         ? 'Step 1 - Packaging'
         : 'Step 2 - Registration';
     final String statusText = !categorySelected
-        ? 'Select a category to start scanning'
+        ? 'Select a category to start scanning.'
         : skipped
         ? (isPackaging
               ? 'Skipped (image-only scan)'
               : 'Skipped (uses packaging text)')
         : hasCapture
-        ? 'Capture saved'
-        : 'Ready to capture';
+        ? 'Capture saved. Retake if details are blurry.'
+        : 'Ready to capture.';
+
+    String badgeLabel;
+    Color badgeBg;
+    Color badgeFg;
+    if (!categorySelected) {
+      badgeLabel = 'Select category';
+      badgeBg = Colors.white24;
+      badgeFg = Colors.white;
+    } else if (skipped) {
+      badgeLabel = 'Skipped';
+      badgeBg = Colors.orangeAccent.shade200;
+      badgeFg = Colors.black87;
+    } else if (hasCapture) {
+      badgeLabel = 'Captured';
+      badgeBg = Colors.greenAccent.shade200;
+      badgeFg = Colors.black87;
+    } else {
+      badgeLabel = 'Ready';
+      badgeBg = Colors.white24;
+      badgeFg = Colors.white;
+    }
+
+    final IconData stepIcon = isPackaging
+        ? Icons.inventory_2_rounded
+        : Icons.rule_folder_rounded;
 
     return SafeArea(
-      minimum: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      minimum: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _buildStepTabs(),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
             decoration: BoxDecoration(
               color: Colors.black.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(18),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
             ),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  stepTitle,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                  ),
+                Align(
+                  alignment: Alignment.center,
+                  child: _buildStepTabs(context),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  statusText,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: Colors.white70,
-                  ),
+                const SizedBox(height: 16),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(stepIcon, color: Colors.white),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            stepTitle,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            statusText,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.85),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: badgeBg,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        badgeLabel,
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: badgeFg,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: primaryAction,
-                  icon: Icon(primaryIcon),
-                  label: Text(primaryLabel),
+                if (!categorySelected)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Select a product category so we know which model to use.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ),
+                if (categorySelected && !skipped && !hasCapture)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      isPackaging
+                          ? 'Frame the full front of the box before capturing.'
+                          : 'Focus on the printed registration text for clearer OCR.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: primaryAction,
+                    icon: Icon(primaryIcon),
+                    label: Text(primaryLabel),
+                  ),
                 ),
                 const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: skipAction,
-                  icon: Icon(skipIcon),
-                  label: Text(skipLabel),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: const BorderSide(color: Colors.white30),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: skipAction,
+                    icon: Icon(skipIcon),
+                    label: Text(skipLabel),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white30),
+                    ),
                   ),
                 ),
                 if (canPreviewPackaging)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
-                    child: OutlinedButton.icon(
+                    child: TextButton.icon(
                       onPressed: _showPackagingPreview,
                       icon: const Icon(Icons.photo_library_outlined),
                       label: const Text('View packaging photo'),
-                      style: OutlinedButton.styleFrom(
+                      style: TextButton.styleFrom(
                         foregroundColor: Colors.white,
-                        side: const BorderSide(color: Colors.white30),
                       ),
                     ),
                   ),
@@ -1966,21 +2074,27 @@ class _ScannerScreenState extends State<ScannerScreen> {
           if (_canConfirmFlow)
             Padding(
               padding: const EdgeInsets.only(top: 12),
-              child: FilledButton.icon(
-                onPressed: _isMatching ? null : _confirmScan,
-                icon: _isMatching
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.check_rounded),
-                label: Text(_isMatching ? 'Matching...' : 'Confirm scan'),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _isMatching ? null : _confirmScan,
+                  icon: _isMatching
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.check_rounded),
+                  label: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(_isMatching ? 'Matching...' : 'Confirm scan'),
+                  ),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
                 ),
               ),
             ),
