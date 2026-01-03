@@ -79,6 +79,12 @@ class PackagingImageClassifier {
   PackagingImageClassifier._();
   static final PackagingImageClassifier instance = PackagingImageClassifier._();
 
+  static PackagingModelConfig? configForCategory(
+    PackagingModelCategory category,
+  ) {
+    return _modelConfigs[category];
+  }
+
   Interpreter? _interpreter;
   List<String>? _labels;
   String? _loadedModelAsset;

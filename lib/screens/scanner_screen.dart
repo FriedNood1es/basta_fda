@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'dart:io';
-import 'package:flutter/services.dart' show HapticFeedback;
+import 'package:flutter/services.dart' show HapticFeedback, rootBundle;
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:basta_fda/models/scan_verdict.dart';
@@ -15,6 +15,7 @@ import 'package:basta_fda/services/image_classifier.dart';
 import 'package:basta_fda/services/settings_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image/image.dart' as img;
+import 'package:basta_fda/services/auth_service.dart';
 
 class ScannerScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
@@ -35,6 +36,8 @@ class ScannerScreen extends StatefulWidget {
 enum _CaptureStep { packaging, regNumber }
 
 enum _ImageQuality { ok, borderline, fail }
+
+enum _ScannerMenu { settings, help, debug }
 
 class _ScannerScreenState extends State<ScannerScreen> {
   CameraController? _controller;
@@ -78,7 +81,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
   String? _pendingRegText;
   String? _pendingRegRaw;
   PackagingModelCategory? _selectedCategory;
-  bool _showCategorySelector = false;
+  bool _isCategorySheetOpen = false;
+  Map<PackagingModelCategory, List<String>>? _trainedProductsCache;
+  bool _isAdmin = false;
 
   bool get _hasCompletedPackaging =>
       _packageCaptureSkipped || _wideShotCaptured;
@@ -112,11 +117,26 @@ class _ScannerScreenState extends State<ScannerScreen> {
         if (user != null) {
           // ignore: discarded_futures
           HistoryService.instance.switchProfileKey(user.uid);
+          AuthService.instance.isAdmin().then((value) {
+            if (mounted) {
+              setState(() {
+                _isAdmin = value;
+              });
+            } else {
+              _isAdmin = value;
+            }
+          });
         } else if (SettingsService.instance.guestMode) {
           // ignore: discarded_futures
           HistoryService.instance.switchProfileKey('guest');
+          _isAdmin = false;
         }
-      } catch (_) {}
+      } catch (_) {
+        _isAdmin = false;
+      }
+      if (settings.hasSeenScopeNotice) {
+        _scheduleCategoryPrompt();
+      }
       _maybeShowScopeNotice();
     });
     // Ensure FDA data is loaded and reasonably fresh (uses cache first)
@@ -193,6 +213,18 @@ class _ScannerScreenState extends State<ScannerScreen> {
       );
       settings.hasSeenScopeNotice = true;
       await settings.save();
+      if (mounted) {
+        _scheduleCategoryPrompt();
+      }
+    });
+  }
+
+  void _scheduleCategoryPrompt({bool forceSelection = true}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _selectedCategory != null || _isCategorySheetOpen) {
+        return;
+      }
+      _showCategoryPicker(forceSelection: forceSelection);
     });
   }
 
@@ -1387,34 +1419,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     super.dispose();
   }
 
-  Widget _buildCategorySelector() {
-    return Positioned(
-      top: 64,
-      left: 12,
-      right: 12,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: PackagingModelCategory.values.map((category) {
-            final selected = _selectedCategory == category;
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ChoiceChip(
-                label: Text(_categoryLabel(category)),
-                selected: selected,
-                onSelected: (_) {
-                  setState(() {
-                    _selectedCategory = category;
-                  });
-                },
-              ),
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
-
   String _categoryLabel(PackagingModelCategory? category) {
     if (category == null) return 'Select category';
     switch (category) {
@@ -1434,9 +1438,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Select a category before scanning.')),
     );
-    if (!_showCategorySelector) {
-      setState(() => _showCategorySelector = true);
-    }
+    _showCategoryPicker(forceSelection: true);
     return false;
   }
 
@@ -1458,6 +1460,172 @@ class _ScannerScreenState extends State<ScannerScreen> {
         _pendingRegCapture = false;
       }
     });
+  }
+
+  Future<void> _showCategoryPicker({bool forceSelection = false}) async {
+    if (_isCategorySheetOpen || !mounted) return;
+    _isCategorySheetOpen = true;
+    final selected = await showModalBottomSheet<PackagingModelCategory>(
+      context: context,
+      isDismissible: !forceSelection,
+      enableDrag: !forceSelection,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Select product category',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    if (!forceSelection)
+                      IconButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                ...PackagingModelCategory.values.map((category) {
+                  final selected = _selectedCategory == category;
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: ListTile(
+                      leading: Icon(
+                        selected
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off,
+                        color: selected
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                      title: Text(_categoryLabel(category)),
+                      onTap: () => Navigator.of(ctx).pop(category),
+                    ),
+                  );
+                }),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: () => _showTrainedProductsPopup(ctx),
+                  icon: const Icon(Icons.inventory_2_outlined),
+                  label: const Text('View trained products'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    _isCategorySheetOpen = false;
+    if (!mounted) return;
+    if (selected != null) {
+      setState(() => _selectedCategory = selected);
+    } else if (forceSelection && _selectedCategory == null) {
+      _scheduleCategoryPrompt();
+    }
+  }
+
+  Future<Map<PackagingModelCategory, List<String>>>
+  _loadTrainedProducts() async {
+    if (_trainedProductsCache != null) return _trainedProductsCache!;
+    final map = <PackagingModelCategory, List<String>>{};
+    for (final category in PackagingModelCategory.values) {
+      final config = PackagingImageClassifier.configForCategory(category);
+      if (config == null) continue;
+      try {
+        final raw = await rootBundle.loadString(config.labelAsset);
+        final lines = raw
+            .split(RegExp(r'\r?\n'))
+            .map((line) => line.trim())
+            .where((line) => line.isNotEmpty)
+            .toList();
+        map[category] = lines;
+      } catch (_) {
+        map[category] = const ['Unable to load labels'];
+      }
+    }
+    _trainedProductsCache = map;
+    return map;
+  }
+
+  Future<void> _showTrainedProductsPopup(BuildContext context) async {
+    final theme = Theme.of(context);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          title: const Text('Trained products'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: FutureBuilder<Map<PackagingModelCategory, List<String>>>(
+              future: _loadTrainedProducts(),
+              builder: (ctx, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const SizedBox(
+                    height: 120,
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                final data = snapshot.data ?? {};
+                if (data.isEmpty) {
+                  return const Text('No trained products available yet.');
+                }
+                return SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: data.entries.map((entry) {
+                      final names = entry.value;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _categoryLabel(entry.key),
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            ...names.map(
+                              (name) => Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 2,
+                                ),
+                                child: Text('• $name'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogCtx).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Widget _buildStepTabs(BuildContext context) {
@@ -1546,17 +1714,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
+    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
         centerTitle: true,
-        title: const Text('Scan Product'),
+        title: Text(
+          'Scan Product',
+          style: theme.textTheme.titleLarge?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         actions: [
-          if (kDebugMode)
-            IconButton(
-              tooltip: 'Log debug asset',
-              icon: const Icon(Icons.bug_report_outlined),
-              onPressed: _runDebugAssetProbe,
-            ),
           IconButton(
             tooltip: 'History',
             icon: const Icon(Icons.history_rounded),
@@ -1565,31 +1733,58 @@ class _ScannerScreenState extends State<ScannerScreen> {
               MaterialPageRoute(builder: (_) => const HistoryScreen()),
             ),
           ),
-          IconButton(
-            tooltip: 'Settings',
+          PopupMenuButton<_ScannerMenu>(
+            tooltip: 'Settings & help',
             icon: const Icon(Icons.settings_rounded),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => SettingsScreen(fdaChecker: widget.fdaChecker),
-              ),
-            ),
-          ),
-          IconButton(
-            tooltip: _showCategorySelector
-                ? 'Hide categories'
-                : 'Select category',
-            icon: Icon(
-              _showCategorySelector ? Icons.category : Icons.category_outlined,
-            ),
-            onPressed: () {
-              setState(() => _showCategorySelector = !_showCategorySelector);
+            onSelected: (value) {
+              switch (value) {
+                case _ScannerMenu.settings:
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          SettingsScreen(fdaChecker: widget.fdaChecker),
+                    ),
+                  );
+                  break;
+                case _ScannerMenu.help:
+                  setState(() => _showCaptureGuide = true);
+                  break;
+                case _ScannerMenu.debug:
+                  _runDebugAssetProbe();
+                  break;
+              }
             },
-          ),
-          IconButton(
-            tooltip: 'How to scan',
-            icon: const Icon(Icons.help_outline_rounded),
-            onPressed: () => setState(() => _showCaptureGuide = true),
+            itemBuilder: (ctx) {
+              final items = <PopupMenuEntry<_ScannerMenu>>[
+                const PopupMenuItem(
+                  value: _ScannerMenu.settings,
+                  child: ListTile(
+                    leading: Icon(Icons.settings_rounded),
+                    title: Text('Settings'),
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: _ScannerMenu.help,
+                  child: ListTile(
+                    leading: Icon(Icons.help_outline_rounded),
+                    title: Text('How to scan'),
+                  ),
+                ),
+              ];
+              if (_isAdmin) {
+                items.add(
+                  const PopupMenuItem(
+                    value: _ScannerMenu.debug,
+                    child: ListTile(
+                      leading: Icon(Icons.bug_report_outlined),
+                      title: Text('Log debug asset'),
+                    ),
+                  ),
+                );
+              }
+              return items;
+            },
           ),
         ],
       ),
@@ -1716,26 +1911,43 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 ),
               ),
             ),
-
-          if (_showCategorySelector || !_hasSelectedCategory)
-            _buildCategorySelector(),
-
-          // (Multi-shot overlay removed)
+          // Category picker + flash controls
           Positioned(
             top: 12,
             right: 12,
-            child: _roundIconButton(
-              icon: _torchOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
-              tooltip: _torchOn ? 'Torch On' : 'Torch Off',
-              onTap: () async {
-                try {
-                  _torchOn = !_torchOn;
-                  await _controller!.setFlashMode(
-                    _torchOn ? FlashMode.torch : FlashMode.off,
-                  );
-                  setState(() {});
-                } catch (_) {}
-              },
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _roundIconButton(
+                  icon: Icons.category_rounded,
+                  tooltip: _selectedCategory != null
+                      ? 'Category: ${_categoryLabel(_selectedCategory)}'
+                      : 'Select category',
+                  onTap: () => _showCategoryPicker(
+                    forceSelection: !_hasSelectedCategory,
+                  ),
+                  backgroundColor: _hasSelectedCategory
+                      ? Colors.black.withValues(alpha: 0.35)
+                      : Colors.orange.withValues(alpha: 0.6),
+                  iconColor: _hasSelectedCategory ? Colors.white : Colors.black,
+                ),
+                const SizedBox(width: 8),
+                _roundIconButton(
+                  icon: _torchOn
+                      ? Icons.flash_on_rounded
+                      : Icons.flash_off_rounded,
+                  tooltip: _torchOn ? 'Torch On' : 'Torch Off',
+                  onTap: () async {
+                    try {
+                      _torchOn = !_torchOn;
+                      await _controller!.setFlashMode(
+                        _torchOn ? FlashMode.torch : FlashMode.off,
+                      );
+                      setState(() {});
+                    } catch (_) {}
+                  },
+                ),
+              ],
             ),
           ),
 
@@ -2108,12 +2320,14 @@ Widget _roundIconButton({
   required IconData icon,
   required VoidCallback onTap,
   String? tooltip,
+  Color? backgroundColor,
+  Color? iconColor,
 }) {
   return Material(
-    color: Colors.black.withValues(alpha: 0.35),
+    color: backgroundColor ?? Colors.black.withValues(alpha: 0.35),
     shape: const CircleBorder(),
     child: IconButton(
-      icon: Icon(icon, color: Colors.white),
+      icon: Icon(icon, color: iconColor ?? Colors.white),
       onPressed: onTap,
       tooltip: tooltip,
     ),
