@@ -528,11 +528,28 @@ void main() {
       'samples': sampleResults,
     };
 
-    final reportDir = Directory('build');
-    if (!reportDir.existsSync()) {
-      reportDir.createSync(recursive: true);
+    Future<File?> _writeReportFile(String relativePath) async {
+      try {
+        final file = File(relativePath);
+        file.parent.createSync(recursive: true);
+        await file.writeAsString(
+          const JsonEncoder.withIndent('  ').convert(report),
+        );
+        return file;
+      } catch (e) {
+        debugPrint('Failed to write $relativePath: $e');
+        return null;
+      }
     }
-    final jsonFile = File('build/verification_eval_results.json');
-    await jsonFile.writeAsString(const JsonEncoder.withIndent('  ').convert(report));
+
+    File? jsonFile = await _writeReportFile('build/verification_eval_results.json');
+    if (jsonFile == null) {
+      final tempPath =
+          '${Directory.systemTemp.path}/verification_eval_results.json';
+      jsonFile = await _writeReportFile(tempPath);
+      if (jsonFile == null) {
+        debugPrint('Unable to persist verification results report.');
+      }
+    }
   }, timeout: const Timeout(Duration(minutes: 10)));
 }

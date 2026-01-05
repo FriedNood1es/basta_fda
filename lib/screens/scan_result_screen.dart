@@ -21,6 +21,7 @@ import 'package:basta_fda/models/scan_verdict.dart';
 
 class ScanResultScreen extends StatefulWidget {
   static const viewHistoryResult = 'view_history';
+  static const scanAgainResult = 'scan_again';
   final Map<String, String> productInfo;
   final String status;
   final RegistrationStatus registrationStatus;
@@ -867,7 +868,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                     children: [
                       Icon(
                         Icons.warning_amber_rounded,
-                        color: theme.colorScheme.error,
+                        color: Colors.red.shade600,
                       ),
                       const SizedBox(width: 10),
                       Expanded(
@@ -1158,7 +1159,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: () => Navigator.of(context)
+                        .pop(ScanResultScreen.scanAgainResult),
                     icon: const Icon(Icons.qr_code_scanner_rounded),
                     label: const Text('Scan another product'),
                     style: OutlinedButton.styleFrom(
@@ -1174,14 +1176,18 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
+                SizedBox(
+                  width: double.infinity,
                   child: TextButton.icon(
                     onPressed: () => Navigator.of(
                       context,
                     ).pop(ScanResultScreen.viewHistoryResult),
                     icon: const Icon(Icons.history_rounded),
                     label: const Text('View scan history'),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      alignment: Alignment.centerLeft,
+                    ),
                   ),
                 ),
               ],
@@ -1419,7 +1425,7 @@ class _ConfidenceDescriptor {
         title: '✔✔ Moderate match',
         detail:
             'Model saw some familiar details, but lighting or framing might need improvement.',
-        color: Colors.amber.shade500,
+        color: Colors.yellow.shade600,
       );
     }
     if (normalized >= 0.2) {
@@ -1428,7 +1434,7 @@ class _ConfidenceDescriptor {
         title: '✔ Low match',
         detail:
             'Model struggled to recognize this capture. Retake a clearer wide shot before trusting the packaging.',
-        color: Colors.orange.shade500,
+        color: Colors.orange.shade600,
       );
     }
     return _ConfidenceDescriptor(

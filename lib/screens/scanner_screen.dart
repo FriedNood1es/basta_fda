@@ -380,7 +380,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     );
   }
 
-  void _resetCaptureFlow({bool clearText = false}) {
+  void _resetCaptureFlow({bool clearText = false, bool clearCategory = false}) {
     _discardPackagingFrames(deleteFiles: true);
     setState(() {
       _wideShotCaptured = false;
@@ -398,7 +398,18 @@ class _ScannerScreenState extends State<ScannerScreen> {
         _extractedText = '';
         _lastRawText = null;
       }
+      if (clearCategory) {
+        _selectedCategory = null;
+      }
     });
+    if (clearCategory) {
+      final settings = SettingsService.instance;
+      if (settings.lastPackagingCategory != null) {
+        settings.lastPackagingCategory = null;
+        // ignore: discarded_futures
+        settings.save();
+      }
+    }
   }
 
   Future<void> _handleScanResultReturn(Object? result) async {
@@ -1163,7 +1174,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
             ),
           ),
         );
-        _resetCaptureFlow(clearText: true);
+        final bool shouldClearCategory =
+            navResult != ScanResultScreen.scanAgainResult;
+        _resetCaptureFlow(
+          clearText: true,
+          clearCategory: shouldClearCategory,
+        );
         await _handleScanResultReturn(navResult);
       } else {
         if (skipImageCheck) {
@@ -1237,7 +1253,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
               ),
             ),
           );
-          _resetCaptureFlow(clearText: false);
+          final bool shouldClearCategory =
+              navResult != ScanResultScreen.scanAgainResult;
+          _resetCaptureFlow(
+            clearText: false,
+            clearCategory: shouldClearCategory,
+          );
           await _handleScanResultReturn(navResult);
         } else {
           await HistoryService.instance.addEntry(
@@ -1372,14 +1393,35 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       ),
                       const SizedBox(height: 12),
                     ],
-                    TextField(
-                      controller: controller,
-                      textCapitalization: TextCapitalization.characters,
-                      decoration: InputDecoration(
-                        labelText: 'Reg. number',
-                        hintText: 'ABC-123456',
-                        errorText: error,
-                      ),
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: controller,
+                      builder: (context, value, _) {
+                        final hasText = value.text.isNotEmpty;
+                        return TextField(
+                          controller: controller,
+                          textCapitalization: TextCapitalization.characters,
+                          decoration: InputDecoration(
+                            labelText: 'Reg. number',
+                            hintText: 'ABC-123456',
+                            errorText: error,
+                            filled: true,
+                            fillColor: theme.colorScheme.surfaceVariant
+                                .withValues(alpha: 0.35),
+                            suffixIcon: hasText
+                                ? IconButton(
+                                    tooltip: 'Clear reg number',
+                                    icon: const Icon(Icons.clear_rounded),
+                                    onPressed: () {
+                                      setSheetState(() {
+                                        controller.clear();
+                                        error = null;
+                                      });
+                                    },
+                                  )
+                                : null,
+                          ),
+                        );
+                      },
                     ),
                     const SizedBox(height: 16),
                     Row(
@@ -1528,10 +1570,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   );
                 }),
                 const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: () => _showTrainedProductsPopup(ctx),
-                  icon: const Icon(Icons.inventory_2_outlined),
-                  label: const Text('View trained products'),
+                Align(
+                  alignment: Alignment.center,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _showTrainedProductsPopup(ctx),
+                    icon: const Icon(Icons.inventory_2_outlined),
+                    label: const Text('View trained products'),
+                  ),
                 ),
               ],
             ),
