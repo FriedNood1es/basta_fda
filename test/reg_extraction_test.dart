@@ -31,6 +31,19 @@ void main() {
       );
     });
 
+    test('captures codes even with spaces around dashes', () {
+      final text = 'FDA Reg. No.: DRP-681 - 02 keep entire code';
+      final candidates = checker.regCandidates(text);
+      expect(
+        candidates.any((c) => normalize(c) == 'drp68102'),
+        isTrue,
+      );
+      expect(
+        normalize(checker.extractRegNumber('reg no DRP-681 - 02') ?? ''),
+        equals('drp68102'),
+      );
+    });
+
     test('_extractRegNumber handles spaces/dashes consistently', () {
       expect(
         checker.extractRegNumber('reg no. dr xy46593'),

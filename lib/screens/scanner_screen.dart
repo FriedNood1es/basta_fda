@@ -111,6 +111,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
       _imageClassifier.updateConfidenceConfig(
         suspiciousThreshold: settings.packagingSuspicionThreshold,
       );
+      final savedCategory = _categoryFromName(settings.lastPackagingCategory);
+      if (savedCategory != null) {
+        setState(() {
+          _selectedCategory = savedCategory;
+        });
+      }
       // Ensure history is scoped to the current session (guest vs user)
       try {
         final user = FirebaseAuth.instance.currentUser;
@@ -134,10 +140,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
       } catch (_) {
         _isAdmin = false;
       }
-      if (settings.hasSeenScopeNotice) {
+      if (settings.hasSeenScopeNotice && _selectedCategory == null) {
         _scheduleCategoryPrompt();
       }
       _maybeShowScopeNotice();
+      _loadTrainedProducts().then((_) {
+        if (mounted) setState(() {});
+      });
     });
     // Ensure FDA data is loaded and reasonably fresh (uses cache first)
     widget.fdaChecker.ensureLoadedAndFresh().then((_) {
@@ -213,7 +222,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       );
       settings.hasSeenScopeNotice = true;
       await settings.save();
-      if (mounted) {
+      if (mounted && _selectedCategory == null) {
         _scheduleCategoryPrompt();
       }
     });
@@ -1270,16 +1279,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final trimmed = input.trim();
     if (trimmed.isEmpty) return null;
     final regPattern = RegExp(
-      r'([A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?|[A-Za-z]{2,4}(?:[\s-]?[A-Za-z]{1,4})?[\s-]?\d{3,6}(?:[\s-]?\d{2,4})?)',
-    );
-    final verbosePattern = RegExp(
-      r'reg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?|[A-Za-z]{2,4}(?:[\s-]?[A-Za-z]{1,4})?[\s-]?\d{3,6}(?:[\s-]?\d{2,4})?)',
+      '(${FDAChecker.regFlexiblePattern})',
       caseSensitive: false,
     );
-    final direct = regPattern.firstMatch(trimmed);
-    if (direct != null) return direct.group(1)?.toUpperCase();
+    final verbosePattern = RegExp(
+      'reg(?:istration)?\\.?\\s*(?:no\\.?|number)\\s*[:#-]?\\s*(${FDAChecker.regFlexiblePattern})',
+      caseSensitive: false,
+    );
     final verbose = verbosePattern.firstMatch(trimmed);
     if (verbose != null) return verbose.group(1)?.toUpperCase();
+    final direct = regPattern.firstMatch(trimmed);
+    if (direct != null) return direct.group(1)?.toUpperCase();
     return null;
   }
 
@@ -1533,6 +1543,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     if (!mounted) return;
     if (selected != null) {
       setState(() => _selectedCategory = selected);
+      _persistLastCategory(selected);
     } else if (forceSelection && _selectedCategory == null) {
       _scheduleCategoryPrompt();
     }
@@ -1541,6 +1552,22 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Future<Map<PackagingModelCategory, List<String>>>
   _loadTrainedProducts() async {
     if (_trainedProductsCache != null) return _trainedProductsCache!;
+    final settings = SettingsService.instance;
+    final cached = settings.cachedPackagingLabels;
+    if (cached != null && cached.isNotEmpty) {
+      final mapped = <PackagingModelCategory, List<String>>{};
+      for (final entry in cached.entries) {
+        final category = _categoryFromName(entry.key);
+        if (category == null) continue;
+        final values = entry.value;
+        if (values.isEmpty) continue;
+        mapped[category] = List<String>.from(values);
+      }
+      if (mapped.isNotEmpty) {
+        _trainedProductsCache = mapped;
+        return mapped;
+      }
+    }
     final map = <PackagingModelCategory, List<String>>{};
     for (final category in PackagingModelCategory.values) {
       final config = PackagingImageClassifier.configForCategory(category);
@@ -1558,7 +1585,23 @@ class _ScannerScreenState extends State<ScannerScreen> {
       }
     }
     _trainedProductsCache = map;
+    settings.cachedPackagingLabels = map.map(
+      (key, value) => MapEntry(key.name, List<String>.from(value)),
+    );
+    await settings.save();
     return map;
+  }
+
+  List<String> _previewTrainedNames(
+    PackagingModelCategory? category, {
+    int limit = 3,
+  }) {
+    final cache = _trainedProductsCache;
+    if (category == null || cache == null) return const [];
+    final list = cache[category];
+    if (list == null || list.isEmpty) return const [];
+    final capped = limit.clamp(1, list.length).toInt();
+    return list.take(capped).toList();
   }
 
   Future<void> _showTrainedProductsPopup(BuildContext context) async {
@@ -2140,6 +2183,15 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final IconData stepIcon = isPackaging
         ? Icons.inventory_2_rounded
         : Icons.rule_folder_rounded;
+    final List<String> previewTrained = _previewTrainedNames(
+      _selectedCategory,
+      limit: 3,
+    );
+    final int totalTrained = _selectedCategory == null
+        ? 0
+        : (_trainedProductsCache?[_selectedCategory!]?.length ?? 0);
+    final bool hasMoreTrained =
+        previewTrained.isNotEmpty && totalTrained > previewTrained.length;
 
     return SafeArea(
       minimum: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -2236,6 +2288,38 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       ),
                     ),
                   ),
+                if (previewTrained.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(
+                          Icons.inventory_2_outlined,
+                          color: Colors.white70,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            hasMoreTrained
+                                ? 'Trained references: ${previewTrained.join(', ')}…'
+                                : 'Trained references: ${previewTrained.join(', ')}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => _showTrainedProductsPopup(context),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('See all'),
+                        ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(height: 16),
                 SizedBox(
                   width: double.infinity,
@@ -2314,6 +2398,22 @@ class _ScannerScreenState extends State<ScannerScreen> {
       ),
     );
   }
+}
+
+PackagingModelCategory? _categoryFromName(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  for (final category in PackagingModelCategory.values) {
+    if (category.name == raw) return category;
+  }
+  return null;
+}
+
+void _persistLastCategory(PackagingModelCategory category) {
+  final settings = SettingsService.instance;
+  if (settings.lastPackagingCategory == category.name) return;
+  settings.lastPackagingCategory = category.name;
+  // ignore: discarded_futures
+  settings.save();
 }
 
 Widget _roundIconButton({

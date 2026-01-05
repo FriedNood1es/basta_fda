@@ -27,6 +27,8 @@ class FDAChecker {
   static const String _cacheFileName = 'FDA_Products_cached.csv';
   static const Duration _staleAfter = Duration(days: 30);
   bool _columnsDerived = false;
+  static const String regFlexiblePattern =
+      '[A-Za-z]{2,4}(?:[\\-\\s]*[A-Za-z]{1,4})?[\\-\\s]*\\d{3,6}(?:[\\-\\s]*\\d{2,4})?';
 
   bool get isLoaded => _data.isNotEmpty;
   int get rowCount =>
@@ -98,17 +100,15 @@ class FDAChecker {
   /// Extract a single registration number from free text, or null if none.
   String? extractRegNumber(String raw) {
     if (raw.trim().isEmpty) return null;
-    final regPattern = RegExp(
-      r'([A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?|[A-Za-z]{2,4}(?:[\s-]?[A-Za-z]{1,4})?[\s-]?\d{3,6}(?:[\s-]?\d{2,4})?)',
-    );
+    final regPattern = RegExp('($regFlexiblePattern)', caseSensitive: false);
     final verbosePattern = RegExp(
-      r'reg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?|[A-Za-z]{2,4}(?:[\s-]?[A-Za-z]{1,4})?[\s-]?\d{3,6}(?:[\s-]?\d{2,4})?)',
+      'reg(?:istration)?\\.?\\s*(?:no\\.?|number)\\s*[:#-]?\\s*($regFlexiblePattern)',
       caseSensitive: false,
     );
-    final direct = regPattern.firstMatch(raw);
-    if (direct != null) return direct.group(1)?.toUpperCase();
     final verbose = verbosePattern.firstMatch(raw);
     if (verbose != null) return verbose.group(1)?.toUpperCase();
+    final direct = regPattern.firstMatch(raw);
+    if (direct != null) return direct.group(1)?.toUpperCase();
     return null;
   }
 
@@ -256,13 +256,13 @@ class FDAChecker {
     // 1) Explicit code pattern seen in dataset: e.g., DRP-4935 or DRP-4961-03
     //    Pattern: (3-4 letters)-(3-6 digits)[-(2-4 digits)]
     final explicitCode =
-        RegExp(r'\b[A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?\b');
+        RegExp('\\b$regFlexiblePattern\\b', caseSensitive: false);
     for (final m in explicitCode.allMatches(text)) {
       out.add(m.group(0)!.trim());
     }
     // 2) Labeled formats: "Reg. No.: DRP-4935" strictly capturing explicit code format only
     final reLabeledStrict = RegExp(
-      r'\breg(?:istration)?\.?\s*(?:no\.?|number)\s*[:#-]?\s*([A-Za-z]{2,4}(?:-[A-Za-z]{1,4})?-\d{3,6}(?:-\d{2,4})?)\b',
+      '\\breg(?:istration)?\\.?\\s*(?:no\\.?|number)\\s*[:#-]?\\s*($regFlexiblePattern)\\b',
       caseSensitive: false,
     );
     for (final m in reLabeledStrict.allMatches(text)) {
@@ -328,14 +328,13 @@ class FDAChecker {
   List<String> _extractRegCandidatesImproved(String raw) {
     final List<String> out = [];
     final text = raw;
-    final explicit = RegExp(
-      r'\b[A-Za-z]{2,4}(?:[\-\s]?[A-Za-z]{1,4})?[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?\b',
-    );
+    final explicit =
+        RegExp('\\b$regFlexiblePattern\\b', caseSensitive: false);
     for (final m in explicit.allMatches(text)) {
       out.add(m.group(0)!.trim());
     }
     final labeled = RegExp(
-      r'\b(?:fda\s*)?reg(?:istration)?\.?\s*(?:no\.?|number)?\s*[:#-]?\s*([A-Za-z]{2,4}(?:[\-\s]?[A-Za-z]{1,4})?[\-\s]?\d{3,6}(?:[\-\s]?\d{2,4})?)\b',
+      '\\b(?:fda\\s*)?reg(?:istration)?\\.?\\s*(?:no\\.?|number)?\\s*[:#-]?\\s*($regFlexiblePattern)\\b',
       caseSensitive: false,
     );
     for (final m in labeled.allMatches(text)) {

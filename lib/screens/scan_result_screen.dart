@@ -47,6 +47,14 @@ class ScanResultScreen extends StatefulWidget {
 class _ScanResultScreenState extends State<ScanResultScreen> {
   late ImageCheckResult _imageResult;
   bool _alertShown = false;
+  static const Set<String> _missingValueTokens = {
+    '',
+    'n/a',
+    'na',
+    'none',
+    'not applicable',
+    'null',
+  };
 
   @override
   void initState() {
@@ -239,6 +247,24 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
         .join(' ');
   }
 
+  bool _isPlaceholderValue(String? raw) {
+    if (raw == null) return true;
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return true;
+    return _missingValueTokens.contains(trimmed.toLowerCase());
+  }
+
+  String _brandDisplayName(Map<String, String> info, {bool includeNote = true}) {
+    final brand = info['brand_name'];
+    if (!_isPlaceholderValue(brand)) return _titleCase(brand);
+    final generic = info['generic_name'];
+    if (!_isPlaceholderValue(generic)) {
+      final genericLabel = _titleCase(generic);
+      return includeNote ? '$genericLabel (brand not listed)' : genericLabel;
+    }
+    return 'Brand not listed';
+  }
+
   bool _packagingFileExists(String? path) {
     if (path == null || path.isEmpty) return false;
     try {
@@ -263,7 +289,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
       ..writeln('')
       ..writeln('Registration status: ${widget.registrationStatus.label}')
       ..writeln('Scan status: ${widget.status}');
-    final brand = _titleCase(info['brand_name']);
+    final brand = _brandDisplayName(info);
     if (brand != 'N/A') buffer.writeln('Brand: $brand');
     final generic = _titleCase(info['generic_name']);
     if (generic != 'N/A') buffer.writeln('Generic: $generic');
@@ -494,6 +520,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     }
 
     final productInfo = widget.productInfo;
+    final bool missingBrand = _isPlaceholderValue(productInfo['brand_name']);
     final status = widget.status;
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
@@ -606,7 +633,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
         return _PackagingConfidenceCard(
           authenticScore: breakdown['authentic'] ?? 0,
           suspiciousScore: breakdown['suspicious'] ?? 0,
-          productName: _titleCase(productInfo['brand_name']),
+          productName: _brandDisplayName(productInfo, includeNote: false),
         );
       }
 
@@ -689,7 +716,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              _titleCase(productInfo['brand_name']),
+                              _brandDisplayName(productInfo),
                               style: theme.textTheme.titleLarge?.copyWith(
                                 fontWeight: FontWeight.w700,
                               ),
@@ -740,6 +767,16 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                 ],
               ),
             ),
+
+            if (missingBrand) ...[
+              const SizedBox(height: 12),
+              const _InfoBanner(
+                icon: Icons.info_outline_rounded,
+                title: 'Brand not listed in FDA record',
+                message:
+                    'Only the generic name is provided for this registration. Please rely on the reg. number when verifying.',
+              ),
+            ],
 
             if (packagingPreview != null || packagingSection != null) ...[
               const SizedBox(height: 20),
@@ -845,6 +882,12 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
                 child: Column(
                   children: [
+                    _DetailRow(
+                      icon: Icons.label_rounded,
+                      label: 'Brand Name',
+                      value: _brandDisplayName(productInfo),
+                    ),
+
                     _DetailRow(
                       icon: Icons.science_rounded,
 

@@ -25,6 +25,8 @@ class SettingsService {
   // Reporter convenience
   String? lastReportCategory;
   String? lastReportContact;
+  String? lastPackagingCategory;
+  Map<String, List<String>>? cachedPackagingLabels;
 
   Future<File> _file() async {
     final dir = await getApplicationDocumentsDirectory();
@@ -70,6 +72,17 @@ class SettingsService {
         }
         lastReportCategory = (json['lastReportCategory'] as String?)?.trim();
         lastReportContact = (json['lastReportContact'] as String?)?.trim();
+        lastPackagingCategory = (json['lastPackagingCategory'] as String?)
+            ?.trim();
+        final cachedLabels = json['cachedPackagingLabels'];
+        if (cachedLabels is Map) {
+          cachedPackagingLabels = cachedLabels.map((key, value) {
+            final entries =
+                (value as List?)?.map((item) => item.toString()).toList() ??
+                <String>[];
+            return MapEntry(key.toString(), entries);
+          });
+        }
       }
     } catch (_) {
       // defaults
@@ -97,6 +110,8 @@ class SettingsService {
       'fdaLastCheckedAt': fdaLastCheckedAt?.toIso8601String(),
       'lastReportCategory': lastReportCategory,
       'lastReportContact': lastReportContact,
+      'lastPackagingCategory': lastPackagingCategory,
+      'cachedPackagingLabels': cachedPackagingLabels,
     });
     await f.writeAsString(data, flush: true);
   }
