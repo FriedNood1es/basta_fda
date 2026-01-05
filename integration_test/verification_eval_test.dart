@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:basta_fda/models/scan_verdict.dart';
@@ -139,7 +140,7 @@ Future<String?> _materializeAsset(String assetPath) async {
   }
 }
 
-class _VerificationDecision {
+class VerificationDecision {
   final String status;
   final RegistrationStatus registrationStatus;
   final ImageCheckResult imageResult;
@@ -148,7 +149,7 @@ class _VerificationDecision {
   final String? regNumber;
   final String predictedLabel;
 
-  _VerificationDecision({
+  VerificationDecision({
     required this.status,
     required this.registrationStatus,
     required this.imageResult,
@@ -170,11 +171,11 @@ class VerificationEvaluator {
   final PackagingImageClassifier _classifier =
       PackagingImageClassifier.instance;
 
-  Future<_VerificationDecision> evaluate(VerificationEvalSample sample) async {
+  Future<VerificationDecision> evaluate(VerificationEvalSample sample) async {
     final assetPath = sample.assetPath;
     final filePath = await _materializeAsset(assetPath);
     if (filePath == null) {
-      return _VerificationDecision(
+      return VerificationDecision(
         status: 'NOT FOUND',
         registrationStatus: RegistrationStatus.unregistered,
         imageResult: const ImageCheckResult(status: ImageCheckStatus.failed),
@@ -243,7 +244,7 @@ class VerificationEvaluator {
       imageResult: imageResult,
     );
 
-    return _VerificationDecision(
+    return VerificationDecision(
       status: status,
       registrationStatus: registrationStatus,
       imageResult: imageResult,
@@ -421,11 +422,17 @@ void main() {
       textRecognizer: textRecognizer,
     );
     final stats = EvalStats();
+    final Map<String, EvalStats> categoryStats = {};
+    final List<Map<String, dynamic>> sampleResults = [];
 
     for (final sample in samples) {
       final decision = await evaluator.evaluate(sample);
       final predicted = decision.predictedLabel;
       stats.add(sample.expectedLabel, predicted);
+      final catKey = (sample.categoryOverride?.name ??
+          _inferCategory(sample.assetPath).name);
+      categoryStats[catKey] ??= EvalStats();
+      categoryStats[catKey]!.add(sample.expectedLabel, predicted);
       final resultLabel =
           predicted == sample.expectedLabel ? 'PASS' : 'FAIL';
       final imageVerdict =
@@ -443,6 +450,20 @@ void main() {
         'predicted=$predicted status=${decision.status} reg=$regNo '
         'brand=$brand image=$imageVerdict',
       );
+
+      sampleResults.add({
+        'image_path': sample.assetPath,
+        'expected': sample.expectedLabel,
+        'predicted': predicted,
+        'status': decision.status,
+        'registration_status': decision.registrationStatus.name,
+        'image_status': decision.imageResult.status.name,
+        'brand': brand,
+        'reg_number': regNo,
+        'category': catKey,
+        'reg_override': sample.regOverride ?? '',
+        'skip_registration': sample.skipRegistration,
+      });
 
       if (_strictEval) {
         expect(
@@ -463,5 +484,55 @@ void main() {
     print('TP=${stats.tp} TN=${stats.tn} FP=${stats.fp} FN=${stats.fn}');
     // ignore: avoid_print
     print('precision=${stats.precisionPct} recall=${stats.recallPct}');
+
+    if (categoryStats.isNotEmpty) {
+      // ignore: avoid_print
+      print('--- Accuracy by category ---');
+      categoryStats.forEach((key, value) {
+        // ignore: avoid_print
+        print(
+          '$key: total=${value.total} accuracy=${value.accuracyPct} '
+          'precision=${value.precisionPct} recall=${value.recallPct}',
+        );
+      });
+    }
+
+    final report = {
+      'summary': {
+        'total': stats.total,
+        'correct': stats.correct,
+        'accuracy': stats.accuracyPct,
+        'tp': stats.tp,
+        'tn': stats.tn,
+        'fp': stats.fp,
+        'fn': stats.fn,
+        'precision': stats.precisionPct,
+        'recall': stats.recallPct,
+      },
+      'categories': categoryStats.map(
+        (key, value) => MapEntry(
+          key,
+          {
+            'total': value.total,
+            'correct': value.correct,
+            'accuracy': value.accuracyPct,
+            'tp': value.tp,
+            'tn': value.tn,
+            'fp': value.fp,
+            'fn': value.fn,
+            'precision': value.precisionPct,
+            'recall': value.recallPct,
+          },
+        ),
+      ),
+      'samples': sampleResults,
+    };
+
+    final reportDir = Directory('build');
+    if (!reportDir.existsSync()) {
+      reportDir.createSync(recursive: true);
+    }
+    final jsonFile = File('build/verification_eval_results.json');
+    await jsonFile.writeAsString(const JsonEncoder.withIndent('  ').convert(report));
   }, timeout: const Timeout(Duration(minutes: 10)));
 }

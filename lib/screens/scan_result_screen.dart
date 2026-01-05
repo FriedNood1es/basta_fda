@@ -525,6 +525,24 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
 
+    String registrationStatusNote(RegistrationStatus status) {
+      switch (status) {
+        case RegistrationStatus.registered:
+          return '“Registered” means we matched this scan to an FDA record in our database.';
+        case RegistrationStatus.unregistered:
+          return '“Unregistered” means no matching FDA record was found for the scanned details.';
+        case RegistrationStatus.skipped:
+          return '“Skipped” means no registration number was provided; rely on packaging cues for verification.';
+      }
+    }
+
+    String? packagingStatusNote(RegistrationStatus status) {
+      if (status == RegistrationStatus.skipped) {
+        return 'Packaging helper is the primary check for categories without FDA codes. Inspect the pack carefully before trusting it.';
+      }
+      return 'Packaging helper is a visual aid; the FDA registration match remains the primary verification.';
+    }
+
     Widget verdictInfoRow({
       required IconData icon,
       required Color color,
@@ -763,6 +781,20 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                           onCopy: () => _copyRegNumber(copyableRegNumber),
                         ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    registrationStatusNote(widget.registrationStatus),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    packagingStatusNote(widget.registrationStatus) ?? '',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
