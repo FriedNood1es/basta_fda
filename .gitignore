@@ -33,6 +33,13 @@ migrate_working_dir/
 .pub/
 /build/
 
+# Gradle caches and Android build outputs
+**/.gradle/
+/android/build/
+
+# Editor scratch/backup files
+*.tmp
+
 # Symbolication related
 app.*.symbols
 

@@ -4,7 +4,7 @@
 - Entry point in `lib/main.dart` wires routing, auth/guest fallback, and loads `FDAChecker`.
 - UI flows live in `lib/screens/` (welcome, onboarding, login, scanner, scan result, history, reports, settings); keep new screens here with local widgets nearby.
 - Domain logic stays in `lib/services/` (`fda_checker.dart`, `image_classifier.dart`, `settings_service.dart`, `history_service.dart`, Firebase bootstrap) and `lib/models/` (e.g., `ScanVerdict`).
-- Static and ML resources: CSV/tflite assets in `assets/`; local `third_party/tflite_flutter` override must stay in sync with pubspec.
+- Static and ML resources: CSV/tflite assets in `assets/`; the `tflite_flutter` plugin resolves from pub.dev (see `pubspec.yaml`).
 - Tests belong in `test/`, mirroring `lib` names (`*_test.dart`).
 
 ## Build, Test, and Development Commands
@@ -38,7 +38,7 @@
 
 ## Image Scan Flow
 1. Select a model category (Food / Cosmetic / Supplement / Medicine). Capture controls stay disabled until one is chosen.
-2. Step 1 – Packaging: capture or retake the packaging photo, or explicitly tap "Skip packaging" if you want an image-only scan.
-3. Step 2 – Registration: once packaging is captured or skipped, capture/retake the reg number shot or skip it similarly.
+2. Step 1 ï¿½ Packaging: capture or retake the packaging photo, or explicitly tap "Skip packaging" if you want an image-only scan.
+3. Step 2 ï¿½ Registration: once packaging is captured or skipped, capture/retake the reg number shot or skip it similarly.
 4. When both steps are satisfied, tap Confirm Scan. If the packaging model recognizes the product you still reach the Scan Result screen even without an FDA match.
 
