@@ -9,6 +9,14 @@ against bundled FDA datasets to flag whether the product looks legitimate.
 Works **offline-first**: the app ships with the FDA datasets baked in and
 refreshes them from the cloud in the background when a network is available.
 
+> ⚠️ **Disclaimer — assistive tool, not official verification.** Not affiliated
+> with or endorsed by the Philippine FDA; not medical, legal, or safety advice.
+> The packaging score is model confidence over a limited set of trained
+> products, **not** a counterfeit detector. FDA data is a periodic snapshot, so a
+> "no match" doesn't prove a product is fake and a match doesn't prove it's
+> genuine. OCR and matching can err. **Always confirm through official FDA
+> channels.**
+
 ## How it works
 
 1. **Choose a category** — Food, Cosmetic, Supplement, or Medicine. Capture
